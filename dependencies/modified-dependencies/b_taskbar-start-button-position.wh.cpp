@@ -19,21 +19,28 @@ DispatcherTimer debounceTimer{nullptr};
 #include <functional>
 #include <string>
 #include <dwmapi.h>
+#include <roapi.h>
+#include <winstring.h>
 #undef GetCurrentTime
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.UI.Core.h>
 #include <winrt/Windows.UI.Xaml.Automation.h>
+#include <winrt/Windows.UI.Xaml.Controls.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
+#include <winrt/Windows.UI.Xaml.Shapes.h>
 #include <winrt/Windows.UI.Xaml.h>
 #include <winrt/base.h>
 using namespace winrt::Windows::UI::Xaml;
 struct {
     bool startMenuOnTheLeft;
-    int startMenuWidth;
 ;bool MoveFlyoutNotificationCenter=true;} g_settings_startbuttonposition;
+enum class Target {
+    Explorer,
+    StartMenuExperienceHost,
+};
+Target g_target;
 std::atomic<bool> g_taskbarViewDllLoadedStartButtonPosition;
-HWND g_startMenuWnd;
-int g_startMenuOriginalWidth;
+thread_local bool g_TaskbarCollapsibleLayoutXamlTraits_ArrangeOverride;
 HWND g_searchMenuWnd;
 int g_searchMenuOriginalX;
 STDAPI GetDpiForMonitor(HMONITOR hmonitor,
@@ -212,17 +219,16 @@ void ApplySettingsStartButtonPosition(HWND hTaskbarWnd) {
         hTaskbarWnd, [](void* pParam) { ApplySettingsFromTaskbarThread(); }, 0);
 }
 using IUIElement_Arrange_t =
-    HRESULT(WINAPI*)(void* pThis, const winrt::Windows::Foundation::Rect* rect);
+    HRESULT(WINAPI*)(void* pThis, winrt::Windows::Foundation::Rect rect);
 IUIElement_Arrange_t IUIElement_Arrange_Original;
-HRESULT WINAPI
-IUIElement_Arrange_Hook(void* pThis,
-                        const winrt::Windows::Foundation::Rect* rect) {
+HRESULT WINAPI IUIElement_Arrange_Hook_StartButtonPosition(void* pThis,
+                                       winrt::Windows::Foundation::Rect rect) {
     auto original = [=] { return IUIElement_Arrange_Original(pThis, rect); };
-    if (g_unloading) {
+    if (!g_TaskbarCollapsibleLayoutXamlTraits_ArrangeOverride || g_unloading) {
         return original();
     }
     FrameworkElement element = nullptr;
-    (*(IUnknown**)pThis)
+    ((IUnknown*)pThis)
         ->QueryInterface(winrt::guid_of<FrameworkElement>(),
                          winrt::put_abi(element));
     if (!element) {
@@ -282,9 +288,70 @@ IUIElement_Arrange_Hook(void* pThis,
                 }
             });
     }
-    winrt::Windows::Foundation::Rect newRect = *rect;
+    winrt::Windows::Foundation::Rect newRect = rect;
     newRect.X = 0;
     return original();
+}
+using TaskbarCollapsibleLayoutXamlTraits_ArrangeOverride_t =
+    HRESULT(WINAPI*)(void* pThis,
+                     void* context,
+                     winrt::Windows::Foundation::Size size,
+                     winrt::Windows::Foundation::Size* resultSize);
+TaskbarCollapsibleLayoutXamlTraits_ArrangeOverride_t
+    TaskbarCollapsibleLayoutXamlTraits_ArrangeOverride_Original;
+HRESULT WINAPI TaskbarCollapsibleLayoutXamlTraits_ArrangeOverride_Hook(
+    void* pThis,
+    void* context,
+    winrt::Windows::Foundation::Size size,
+    winrt::Windows::Foundation::Size* resultSize) {
+    [[maybe_unused]] static bool hooked = [] {
+        Shapes::Rectangle rectangle;
+        IUIElement element = rectangle;
+        void** vtable = *(void***)winrt::get_abi(element);
+        auto arrange = (IUIElement_Arrange_t)vtable[92];
+        WindhawkUtils::SetFunctionHook(arrange, IUIElement_Arrange_Hook_StartButtonPosition,
+                                       &IUIElement_Arrange_Original);
+        Wh_ApplyHookOperations();
+        return true;
+    }();
+    g_TaskbarCollapsibleLayoutXamlTraits_ArrangeOverride = true;
+    HRESULT ret = TaskbarCollapsibleLayoutXamlTraits_ArrangeOverride_Original(
+        pThis, context, size, resultSize);
+    g_TaskbarCollapsibleLayoutXamlTraits_ArrangeOverride = false;
+    return ret;
+}
+using ExperienceToggleButton_UpdateButtonPadding_t = void(WINAPI*)(void* pThis);
+void WINAPI ExperienceToggleButton_UpdateButtonPadding_Hook_StartButtonPosition(void* pThis) {
+    ExperienceToggleButton_UpdateButtonPadding_Original(pThis);
+    return;  // fork: skip upstream's start-button panel mutations
+    if (g_unloading) {
+        return;
+    }
+    FrameworkElement toggleButtonElement = nullptr;
+    ((IUnknown**)pThis)[1]->QueryInterface(winrt::guid_of<FrameworkElement>(),
+                                           winrt::put_abi(toggleButtonElement));
+    if (!toggleButtonElement) {
+        return;
+    }
+    auto panelElement =
+        FindChildByName(toggleButtonElement, L"ExperienceToggleButtonRootPanel")
+            .try_as<Controls::Grid>();
+    if (!panelElement) {
+        return;
+    }
+    auto className = winrt::get_class_name(toggleButtonElement);
+    if (className == L"Taskbar.ExperienceToggleButton") {
+        auto automationId = Automation::AutomationProperties::GetAutomationId(
+            toggleButtonElement);
+        if (automationId == L"StartButton") {
+            if (panelElement.Width() == 45) {
+                panelElement.Width(55);
+            }
+            if (panelElement.Padding() == Thickness{2, 4, 2, 4}) {
+                panelElement.Padding(Thickness{12, 4, 2, 4});
+            }
+        }
+    }
 }
 using AugmentedEntryPointButton_UpdateButtonPadding_t =
     void(WINAPI*)(void* pThis);
@@ -306,7 +373,7 @@ void WINAPI AugmentedEntryPointButton_UpdateButtonPadding_Hook_StartButtonPositi
                 return;
             }
             auto margin = button.Margin();
-            margin.Left = 34;
+            margin.Left = 44;
             button.Margin(margin);
         });
 }
@@ -587,9 +654,14 @@ bool HookTaskbarViewDllSymbolsStartButtonPosition(HMODULE module) {
     {{LR"(public: static void __cdecl TaskbarTelemetry::StartHideAnimationCompleted(void))"}, &TaskbarTelemetry_StartHideAnimationCompleted_WithoutArgs_Original, TaskbarTelemetry_StartHideAnimationCompleted_WithoutArgs_Hook},
     {{LR"(public: static void __cdecl TaskbarTelemetry::StartEntranceAnimationCompleted(void))"}, &TaskbarTelemetry_StartEntranceAnimationCompleted_WithoutArgs_Original, TaskbarTelemetry_StartEntranceAnimationCompleted_WithoutArgs_Hook},
         {
-            {LR"(public: __cdecl winrt::impl::consume_Windows_UI_Xaml_IUIElement<struct winrt::Windows::UI::Xaml::IUIElement>::Arrange(struct winrt::Windows::Foundation::Rect const &)const )"},
-            &IUIElement_Arrange_Original,
-            IUIElement_Arrange_Hook,
+            {LR"(public: virtual int __cdecl winrt::impl::produce<struct winrt::Taskbar::implementation::TaskbarCollapsibleLayout,struct winrt::Microsoft::UI::Xaml::Controls::IVirtualizingLayoutOverrides>::ArrangeOverride(void *,struct winrt::Windows::Foundation::Size,struct winrt::Windows::Foundation::Size *))"},
+            &TaskbarCollapsibleLayoutXamlTraits_ArrangeOverride_Original,
+            TaskbarCollapsibleLayoutXamlTraits_ArrangeOverride_Hook,
+        },
+        {
+            {LR"(protected: virtual void __cdecl winrt::Taskbar::implementation::ExperienceToggleButton::UpdateButtonPadding(void))"},
+            &ExperienceToggleButton_UpdateButtonPadding_Original,
+            ExperienceToggleButton_UpdateButtonPadding_Hook_StartButtonPosition,
         },
         {
             {LR"(protected: virtual void __cdecl winrt::Taskbar::implementation::AugmentedEntryPointButton::UpdateButtonPadding(void))"},
@@ -638,6 +710,17 @@ std::wstring GetProcessFileName(DWORD dwProcessId) {
     processFileNameUpper++;
     return processFileNameUpper;
 }
+//
+// Replaces the upstream taskbar-start-button-position.wh.cpp hook with a
+// unified per-monitor popup-placement design that handles Start Menu,
+// Search, and Notification Center across multi-monitor + mixed-DPI setups.
+// See README of the fork for context.
+//
+// This file is injected by dependencies/main.py into the regenerated
+// b_taskbar-start-button-position.wh.cpp, replacing upstream's smaller
+// hook. Keeping the customization here (not in modified-dependencies/)
+// means a clean `python assemble-mod.py` run pulls in latest upstream
+// and re-injects our logic on top.
 using DwmSetWindowAttribute_t = decltype(&DwmSetWindowAttribute);
 DwmSetWindowAttribute_t DwmSetWindowAttribute_Original;
 HRESULT WINAPI DwmSetWindowAttribute_Hook(HWND hwnd,
@@ -678,11 +761,6 @@ Wh_Log(L"process: %s, windowClassName: %s",processFileName.c_str(),windowClassNa
     }  else {
         return original();
     }
-    // Determine which monitor the popup belongs to. MonitorFromWindow returns
-    // the popup's *current* monitor, but Windows often places the popup on the
-    // primary monitor before our hook fires, even when the user clicked on a
-    // secondary taskbar. The cursor position at the moment of the click is a
-    // much better proxy for "which taskbar invoked this".
     HMONITOR monitor = nullptr;
     POINT cursorPos;
     if (GetCursorPos(&cursorPos)) {
@@ -713,32 +791,6 @@ Wh_Log(L"process: %s, windowClassName: %s",processFileName.c_str(),windowClassNa
     int y = targetRect.top;
     int cx = targetRect.right - targetRect.left;
     int cy = targetRect.bottom - targetRect.top;
-    // ====================================================================
-    // === Unified popup placement (refactored, single code path) =========
-    // ====================================================================
-    // Replaces the previous per-target patched logic with a single design:
-    //
-    //   * All math in DIPs in monitor-local coordinates, converted to
-    //     virtual-screen physical pixels once at the very end.
-    //   * No state read from the popup hwnd (cx/cy/x/y from GetWindowRect
-    //     are unreliable across monitors and across mod reloads — Windows
-    //     reports stale physical-pixel sizes from previous SetWindowPos
-    //     calls, which is what poisoned every previous attempt).
-    //   * Per-target placement strategy is a static table, not branching
-    //     formulas that drift apart over time.
-    //
-    //   Target              X                          Y                       Size
-    //   ----------------- + -------------------------- + ---------------------- + --------------------------
-    //   StartMenu           monitor.left               monitor.top              keep Windows' cx/cy (Win11
-    //                                                                           sizes Start menu to the
-    //                                                                           destination monitor itself)
-    //   SearchHost          centered under taskbar     bottom just above the    cached natural DIPs scaled
-    //                                                  visible taskbar          to dest monitor's DPI
-    //   ShellExperienceHost right-aligned to taskbar   monitor.top              keep Windows' cx/cy (NC
-    //                       right edge                                          is a full-height sidebar)
-
-    // Skip everything if mod is unloading or the relevant setting is off —
-    // let Windows handle positioning natively in those cases.
     bool moveStartSetting = g_settings_startbuttonposition.startMenuOnTheLeft;
     bool moveNCSetting    = g_settings_startbuttonposition.MoveFlyoutNotificationCenter;
     bool wantPlace =
@@ -746,19 +798,7 @@ Wh_Log(L"process: %s, windowClassName: %s",processFileName.c_str(),windowClassNa
         ((target == Target::StartMenu          && moveStartSetting) ||
          (target == Target::SearchHost         && moveStartSetting) ||
          (target == Target::ShellExperienceHost && moveNCSetting));
-
     if (wantPlace) {
-        // Cache the Search popup's natural size in DIPs. Windows sizes popups
-        // intrinsically for the primary monitor's DPI; on any other monitor
-        // the reported physical size is whatever someone last set, which is
-        // not a reliable source of truth (Windows migrates the hwnd to a new
-        // monitor without resizing it). So we only snapshot the cache when:
-        //   - target is Search (other popups don't need DIP-based sizing), AND
-        //   - the popup hwnd is currently on the primary monitor, AND
-        //   - our hook fired for the primary monitor (cursor was there), AND
-        //   - the observed size in primary-DPI DIPs is in the natural range.
-        // This guarantees we never adopt a stale cross-monitor size as the
-        // "natural" baseline.
         static int g_naturalSearchCxDIPs = 0;
         static int g_naturalSearchCyDIPs = 0;
         {
@@ -786,42 +826,25 @@ Wh_Log(L"process: %s, windowClassName: %s",processFileName.c_str(),windowClassNa
                 g_naturalSearchCyDIPs = kDefaultSearchCyDIPs;
             }
         }
-
-        // Taskbar geometry in DIPs (from taskbarState, populated by ApplyStyle
-        // in explorer.exe; stabilized via floor() so no float drift).
         int tbarLeftDIPs   = (int)taskbarState.lastStartButtonXCalculated;
         int tbarWidthDIPs  = (int)taskbarState.lastTargetWidth;
         int tbarCenterDIPs = tbarLeftDIPs + tbarWidthDIPs / 2;
         int tbarRightDIPs  = tbarLeftDIPs + tbarWidthDIPs;
-
-        // Visual taskbar height in DIPs (mod setting; includes Y offset).
         int tbarVisualHDIPs =
             (int)g_settings.userDefinedTaskbarHeight +
             std::abs((int)g_settings.userDefinedTaskbarOffsetY);
-
         int monW = monitorInfo.rcMonitor.right  - monitorInfo.rcMonitor.left;
         int monH = monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top;
-
         if (target == Target::StartMenu) {
-            // Start menu: monitor-sized hwnd at destination's top-left.
-            // Win11 manages visible content inside via XAML Canvas, and
-            // it already resizes the hwnd to match destination monitor
-            // before our hook fires — so we keep cx/cy as-is.
             x = monitorInfo.rcMonitor.left;
             y = monitorInfo.rcMonitor.top;
-            g_startMenuWnd = hwnd;
         } else if (target == Target::SearchHost) {
-            // Derive popup size from cached natural DIPs (idempotent across
-            // any number of re-launches; never compounds).
             cx = MulDiv(g_naturalSearchCxDIPs, monitorDpiX, 96);
             cy = MulDiv(g_naturalSearchCyDIPs, monitorDpiY, 96);
-            // X: centered under visible taskbar.
             int xLocal = MulDiv(tbarCenterDIPs, monitorDpiX, 96) - cx / 2;
-            // Y: popup bottom = monitor bottom - visible-taskbar height - margin.
             int tbarVisualHPx = MulDiv(tbarVisualHDIPs, monitorDpiY, 96);
             int marginPx      = MulDiv(6, monitorDpiY, 96);
             int yLocal = monH - tbarVisualHPx - marginPx - cy;
-            // Clamp inside monitor with 10 px breathing room.
             if (xLocal < 10) xLocal = 10;
             if (xLocal + cx > monW - 10) xLocal = monW - cx - 10;
             if (yLocal < 10) yLocal = 10;
@@ -830,19 +853,9 @@ Wh_Log(L"process: %s, windowClassName: %s",processFileName.c_str(),windowClassNa
             g_searchMenuWnd = hwnd;
             g_searchMenuOriginalX = targetRect.left;
         } else /* Target::ShellExperienceHost */ {
-            // ShellExperienceHost.exe owns BOTH the Notification Center
-            // (full-monitor-height sidebar on the right) AND toast
-            // notifications (small popups at bottom-right). They come
-            // through this same hook. We discriminate by height:
-            //   Notification Center: cy ≈ monitor height (1500-2100 px)
-            //   Toast notification:  cy ≈ 100-300 px (well under half)
-            // For toasts, Windows already places them correctly at the
-            // bottom-right corner — we must NOT move them. Returning
-            // original() skips both our SetWindowPos and the file log.
             if (cy < monH / 2) {
                 return original();  // toast — leave Windows' positioning alone
             }
-            // Notification Center: right-aligned with taskbar, top-anchored.
             int xLocal = MulDiv(tbarRightDIPs, monitorDpiX, 96) - cx;
             if (xLocal < 10) xLocal = 10;
             if (xLocal + cx > monW - 10) xLocal = monW - cx - 10;
@@ -850,11 +863,6 @@ Wh_Log(L"process: %s, windowClassName: %s",processFileName.c_str(),windowClassNa
             y = monitorInfo.rcMonitor.top;  // top-anchor; cy already monitor-sized
         }
     }
-
-    // === Final safety clamp =============================================
-    // Guarantee popup is at least mostly visible on the destination monitor,
-    // regardless of how x/y were computed. Catches any future bug that
-    // would push the popup off-screen.
     {
         int safeMinX = monitorInfo.rcMonitor.left   - cx + 100;
         int safeMaxX = monitorInfo.rcMonitor.right  - 100;
@@ -865,9 +873,6 @@ Wh_Log(L"process: %s, windowClassName: %s",processFileName.c_str(),windowClassNa
         if (y < safeMinY) y = safeMinY;
         if (y > safeMaxY) y = safeMaxY;
     }
-    // === DIAGNOSTIC LOG (popup positioning) ===
-    // Also write to %TEMP%\windhawk_popup_log.txt so the user can read logs
-    // without needing DebugView. Each popup open appends one line.
     Wh_Log(L"[POPUP-DBG] target=%d proc=%s monitor=%s mDPI=%u rcMon=(%ld,%ld)-(%ld,%ld) rcWork=(%ld,%ld)-(%ld,%ld) cursor=(%ld,%ld) winRect.in=(%ld,%ld,cx=%d,cy=%d) finalSetPos=(x=%d,y=%d,cx=%d,cy=%d) tbState{startBtnX=%.2f rootW=%.2f targetW=%.2f}",
            (int)target,
            processFileName.c_str(),
@@ -918,23 +923,232 @@ Wh_Log(L"process: %s, windowClassName: %s",processFileName.c_str(),windowClassNa
     SetWindowPos(hwnd, nullptr, x, y, cx, cy, SWP_NOZORDER | SWP_NOACTIVATE);
     return original();
 }
-void RestoreMenuPositions() {
-    if (g_startMenuWnd && g_startMenuOriginalWidth) {
-        RECT rect;
-        if (GetWindowRect(g_startMenuWnd, &rect)) {
-            int x = rect.left;
-            int y = rect.top;
-            int cx = rect.right - rect.left;
-            int cy = rect.bottom - rect.top;
-            if (g_startMenuOriginalWidth != cx) {
-                cx = g_startMenuOriginalWidth;
-                SetWindowPos(g_startMenuWnd, nullptr, x, y, cx, cy,
-                             SWP_NOZORDER | SWP_NOACTIVATE);
+namespace StartMenuUI {
+bool g_applyStylePending;
+bool g_inApplyStyle;
+std::optional<double> g_previousCanvasLeft;
+winrt::weak_ref<DependencyObject> g_startSizingFrameWeakRef;
+int64_t g_canvasTopPropertyChangedToken;
+int64_t g_canvasLeftPropertyChangedToken;
+std::optional<HorizontalAlignment> g_previousHorizontalAlignment;
+winrt::event_token g_layoutUpdatedToken;
+winrt::event_token g_visibilityChangedToken;
+HWND GetCoreWnd() {
+    struct ENUM_WINDOWS_PARAM {
+        HWND* hWnd;
+    };
+    HWND hWnd = nullptr;
+    ENUM_WINDOWS_PARAM param = {&hWnd};
+    EnumWindows(
+        [](HWND hWnd, LPARAM lParam) -> BOOL {
+            ENUM_WINDOWS_PARAM& param = *(ENUM_WINDOWS_PARAM*)lParam;
+            DWORD dwProcessId = 0;
+            if (!GetWindowThreadProcessId(hWnd, &dwProcessId) ||
+                dwProcessId != GetCurrentProcessId()) {
+                return TRUE;
+            }
+            WCHAR szClassName[32];
+            if (GetClassName(hWnd, szClassName, ARRAYSIZE(szClassName)) == 0) {
+                return TRUE;
+            }
+            if (_wcsicmp(szClassName, L"Windows.UI.Core.CoreWindow") == 0) {
+                *param.hWnd = hWnd;
+                return FALSE;
+            }
+            return TRUE;
+        },
+        (LPARAM)&param);
+    return hWnd;
+}
+void ApplyStyle();
+void ApplyStyleClassicStartMenu(FrameworkElement content, HMONITOR monitor) {
+    FrameworkElement startSizingFrame =
+        FindChildByClassName(content, L"StartDocked.StartSizingFrame");
+    if (!startSizingFrame) {
+        Wh_Log(L"Failed to find StartDocked.StartSizingFrame");
+        return;
+    }
+    if (g_unloading) {
+        if (g_previousCanvasLeft.has_value()) {
+            Wh_Log(L"Restoring Canvas.Left to %f",
+                   g_previousCanvasLeft.value());
+            Controls::Canvas::SetLeft(startSizingFrame,
+                                      g_previousCanvasLeft.value());
+        }
+    } else {
+        if (!g_previousCanvasLeft.has_value()) {
+            double canvasLeft = Controls::Canvas::GetLeft(startSizingFrame);
+            if (canvasLeft) {
+                g_previousCanvasLeft = canvasLeft;
             }
         }
-        g_startMenuWnd = nullptr;
-        g_startMenuOriginalWidth = 0;
+        constexpr int kStartMenuMargin = 12;
+        double newLeft = kStartMenuMargin;
+        Wh_Log(L"Setting Canvas.Left to %f", newLeft);
+        Controls::Canvas::SetLeft(startSizingFrame, newLeft);
+        if (!g_startSizingFrameWeakRef.get()) {
+            auto startSizingFrameDo = startSizingFrame.as<DependencyObject>();
+            g_startSizingFrameWeakRef = startSizingFrameDo;
+            g_canvasTopPropertyChangedToken =
+                startSizingFrameDo.RegisterPropertyChangedCallback(
+                    Controls::Canvas::TopProperty(),
+                    [](DependencyObject sender, DependencyProperty property) {
+                        double top = Controls::Canvas::GetTop(
+                            sender.as<FrameworkElement>());
+                        Wh_Log(L"Canvas.Top changed to %f", top);
+                        if (!g_inApplyStyle) {
+                            ApplyStyle();
+                        }
+                    });
+            g_canvasLeftPropertyChangedToken =
+                startSizingFrameDo.RegisterPropertyChangedCallback(
+                    Controls::Canvas::LeftProperty(),
+                    [](DependencyObject sender, DependencyProperty property) {
+                        double left = Controls::Canvas::GetLeft(
+                            sender.as<FrameworkElement>());
+                        Wh_Log(L"Canvas.Left changed to %f", left);
+                        if (!g_inApplyStyle) {
+                            ApplyStyle();
+                        }
+                    });
+        }
     }
+}
+void ApplyStyleRedesignedStartMenu(FrameworkElement content) {
+    FrameworkElement frameRoot = FindChildByName(content, L"FrameRoot");
+    if (!frameRoot) {
+        Wh_Log(L"Failed to find Start menu frame root");
+        return;
+    }
+    if (g_unloading) {
+        frameRoot.HorizontalAlignment(g_previousHorizontalAlignment.value_or(
+            HorizontalAlignment::Center));
+    } else {
+        if (!g_previousHorizontalAlignment) {
+            g_previousHorizontalAlignment = frameRoot.HorizontalAlignment();
+        }
+        frameRoot.HorizontalAlignment(HorizontalAlignment::Left);
+    }
+}
+void ApplyStyle() {
+    g_inApplyStyle = true;
+    HWND coreWnd = GetCoreWnd();
+    HMONITOR monitor = MonitorFromWindow(coreWnd, MONITOR_DEFAULTTONEAREST);
+    Wh_Log(L"Applying Start menu style for monitor %p", monitor);
+    auto window = Window::Current();
+    FrameworkElement content = window.Content().as<FrameworkElement>();
+    winrt::hstring contentClassName = winrt::get_class_name(content);
+    Wh_Log(L"Start menu content class name: %s", contentClassName.c_str());
+    if (contentClassName == L"Windows.UI.Xaml.Controls.Canvas") {
+        ApplyStyleClassicStartMenu(content, monitor);
+    } else if (contentClassName == L"StartMenu.StartBlendedFlexFrame") {
+        ApplyStyleRedesignedStartMenu(content);
+    } else {
+        Wh_Log(L"Error: Unsupported Start menu content class name");
+    }
+    g_inApplyStyle = false;
+}
+void Init() {
+    if (g_layoutUpdatedToken) {
+        return;
+    }
+    auto window = Window::Current();
+    if (!window) {
+        return;
+    }
+    if (!g_visibilityChangedToken) {
+        g_visibilityChangedToken = window.VisibilityChanged(
+            [](winrt::Windows::Foundation::IInspectable const& sender,
+               winrt::Windows::UI::Core::VisibilityChangedEventArgs const&
+                   args) {
+                Wh_Log(L"Window visibility changed: %d", args.Visible());
+                if (args.Visible()) {
+                    g_applyStylePending = true;
+                }
+            });
+    }
+    auto contentUI = window.Content();
+    if (!contentUI) {
+        return;
+    }
+    auto content = contentUI.as<FrameworkElement>();
+    g_layoutUpdatedToken = content.LayoutUpdated(
+        [](winrt::Windows::Foundation::IInspectable const&,
+           winrt::Windows::Foundation::IInspectable const&) {
+            if (g_applyStylePending) {
+                g_applyStylePending = false;
+                ApplyStyle();
+            }
+        });
+    ApplyStyle();
+}
+void Uninit() {
+    if (!g_layoutUpdatedToken) {
+        return;
+    }
+    auto window = Window::Current();
+    if (!window) {
+        return;
+    }
+    if (g_visibilityChangedToken) {
+        window.VisibilityChanged(g_visibilityChangedToken);
+        g_visibilityChangedToken = {};
+    }
+    auto contentUI = window.Content();
+    if (!contentUI) {
+        return;
+    }
+    auto content = contentUI.as<FrameworkElement>();
+    content.LayoutUpdated(g_layoutUpdatedToken);
+    g_layoutUpdatedToken = {};
+    auto startSizingFrameDo = g_startSizingFrameWeakRef.get();
+    if (startSizingFrameDo) {
+        if (g_canvasTopPropertyChangedToken) {
+            startSizingFrameDo.UnregisterPropertyChangedCallback(
+                Controls::Canvas::TopProperty(),
+                g_canvasTopPropertyChangedToken);
+            g_canvasTopPropertyChangedToken = 0;
+        }
+        if (g_canvasLeftPropertyChangedToken) {
+            startSizingFrameDo.UnregisterPropertyChangedCallback(
+                Controls::Canvas::LeftProperty(),
+                g_canvasLeftPropertyChangedToken);
+            g_canvasLeftPropertyChangedToken = 0;
+        }
+    }
+    g_startSizingFrameWeakRef = nullptr;
+    ApplyStyle();
+}
+void SettingsChanged() {
+    ApplyStyle();
+}
+using RoGetActivationFactory_t = decltype(&RoGetActivationFactory);
+RoGetActivationFactory_t RoGetActivationFactory_Original;
+HRESULT WINAPI RoGetActivationFactory_Hook(HSTRING activatableClassId,
+                                           REFIID iid,
+                                           void** factory) {
+    thread_local static bool isInHook;
+    if (isInHook) {
+        return RoGetActivationFactory_Original(activatableClassId, iid,
+                                               factory);
+    }
+    isInHook = true;
+    if (wcscmp(WindowsGetStringRawBuffer(activatableClassId, nullptr),
+               L"Windows.UI.Xaml.Hosting.XamlIsland") == 0) {
+        try {
+            Init();
+        } catch (...) {
+            HRESULT hr = winrt::to_hresult();
+            Wh_Log(L"Error %08X", hr);
+        }
+    }
+    HRESULT ret =
+        RoGetActivationFactory_Original(activatableClassId, iid, factory);
+    isInHook = false;
+    return ret;
+}
+}  // namespace StartMenuUI
+void RestoreMenuPositions() {
     if (g_searchMenuWnd && g_searchMenuOriginalX) {
         RECT rect;
         if (GetWindowRect(g_searchMenuWnd, &rect)) {
@@ -955,10 +1169,43 @@ void RestoreMenuPositions() {
 void LoadSettingsStartButtonPosition() {
     g_settings_startbuttonposition.startMenuOnTheLeft = Wh_GetIntSetting(L"MoveFlyoutStartMenu");
 g_settings_startbuttonposition.MoveFlyoutNotificationCenter = Wh_GetIntSetting(L"MoveFlyoutNotificationCenter");
-    g_settings_startbuttonposition.startMenuWidth = 660;
 }
 BOOL Wh_ModInitStartButtonPosition() {
     LoadSettingsStartButtonPosition();
+    g_target = Target::Explorer;
+    WCHAR moduleFilePath[MAX_PATH];
+    switch (
+        GetModuleFileName(nullptr, moduleFilePath, ARRAYSIZE(moduleFilePath))) {
+        case 0:
+        case ARRAYSIZE(moduleFilePath):
+            Wh_Log(L"GetModuleFileName failed");
+            break;
+        default:
+            if (PCWSTR moduleFileName = wcsrchr(moduleFilePath, L'\\')) {
+                moduleFileName++;
+                if (_wcsicmp(moduleFileName, L"StartMenuExperienceHost.exe") ==
+                    0) {
+                    g_target = Target::StartMenuExperienceHost;
+                }
+            } else {
+                Wh_Log(L"GetModuleFileName returned an unsupported path");
+            }
+            break;
+    }
+    if (g_target == Target::StartMenuExperienceHost) {
+        if (!g_settings_startbuttonposition.startMenuOnTheLeft) {
+            return FALSE;
+        }
+        HMODULE winrtModule =
+            GetModuleHandle(L"api-ms-win-core-winrt-l1-1-0.dll");
+        auto pRoGetActivationFactory =
+            (decltype(&RoGetActivationFactory))GetProcAddress(
+                winrtModule, "RoGetActivationFactory");
+        WindhawkUtils::SetFunctionHook(
+            pRoGetActivationFactory, StartMenuUI::RoGetActivationFactory_Hook,
+            &StartMenuUI::RoGetActivationFactory_Original);
+        return TRUE;
+    }
     if (!HookTaskbarDllSymbolsStartButtonPosition()) {
         return FALSE;
     }
@@ -973,9 +1220,9 @@ BOOL Wh_ModInitStartButtonPosition() {
         auto pKernelBaseLoadLibraryExW =
             (decltype(&LoadLibraryExW))GetProcAddress(kernelBaseModule,
                                                       "LoadLibraryExW");
-        WindhawkUtils::Wh_SetFunctionHookT(pKernelBaseLoadLibraryExW,
-                                           LoadLibraryExW_Hook_StartButtonPosition,
-                                           &LoadLibraryExW_Original);
+        WindhawkUtils::SetFunctionHook(pKernelBaseLoadLibraryExW,
+                                       LoadLibraryExW_Hook_StartButtonPosition,
+                                       &LoadLibraryExW_Original);
     }
     HMODULE dwmapiModule =
         LoadLibraryEx(L"dwmapi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -984,40 +1231,75 @@ BOOL Wh_ModInitStartButtonPosition() {
             (decltype(&DwmSetWindowAttribute))GetProcAddress(
                 dwmapiModule, "DwmSetWindowAttribute");
         if (pDwmSetWindowAttribute) {
-            WindhawkUtils::Wh_SetFunctionHookT(pDwmSetWindowAttribute,
-                                               DwmSetWindowAttribute_Hook,
-                                               &DwmSetWindowAttribute_Original);
+            WindhawkUtils::SetFunctionHook(pDwmSetWindowAttribute,
+                                           DwmSetWindowAttribute_Hook,
+                                           &DwmSetWindowAttribute_Original);
         }
     }
     return TRUE;
 }
 void Wh_ModAfterInitStartButtonPosition() {
-    if (!g_taskbarViewDllLoadedStartButtonPosition) {
-        if (HMODULE taskbarViewModule = GetTaskbarViewModuleHandle()) {
-            if (!g_taskbarViewDllLoadedStartButtonPosition.exchange(true)) {
-                Wh_Log(L"Got Taskbar.View.dll");
-                if (HookTaskbarViewDllSymbolsStartButtonPosition(taskbarViewModule)) {
-                    Wh_ApplyHookOperations();
+    if (g_target == Target::Explorer) {
+        if (!g_taskbarViewDllLoadedStartButtonPosition) {
+            if (HMODULE taskbarViewModule = GetTaskbarViewModuleHandle()) {
+                if (!g_taskbarViewDllLoadedStartButtonPosition.exchange(true)) {
+                    Wh_Log(L"Got Taskbar.View.dll");
+                    if (HookTaskbarViewDllSymbolsStartButtonPosition(taskbarViewModule)) {
+                        Wh_ApplyHookOperations();
+                    }
                 }
             }
         }
-    }
-    HWND hTaskbarWnd = FindCurrentProcessTaskbarWnd();
-    if (hTaskbarWnd) {
-        ApplySettingsStartButtonPosition(hTaskbarWnd);
+        HWND hTaskbarWnd = FindCurrentProcessTaskbarWnd();
+        if (hTaskbarWnd) {
+            ApplySettingsStartButtonPosition(hTaskbarWnd);
+        }
+    } else if (g_target == Target::StartMenuExperienceHost) {
+        HWND hCoreWnd = StartMenuUI::GetCoreWnd();
+        if (hCoreWnd) {
+            Wh_Log(L"Initializing - Found core window");
+            RunFromWindowThread(
+                hCoreWnd, [](PVOID) { StartMenuUI::Init(); }, nullptr);
+        }
     }
 }
 void Wh_ModBeforeUninitStartButtonPosition() {
     g_unloading = true;
-    HWND hTaskbarWnd = FindCurrentProcessTaskbarWnd();
-    if (hTaskbarWnd) {
-        ApplySettingsStartButtonPosition(hTaskbarWnd);
+    if (g_target == Target::Explorer) {
+        HWND hTaskbarWnd = FindCurrentProcessTaskbarWnd();
+        if (hTaskbarWnd) {
+            ApplySettingsStartButtonPosition(hTaskbarWnd);
+        }
+    } else if (g_target == Target::StartMenuExperienceHost) {
+        HWND hCoreWnd = StartMenuUI::GetCoreWnd();
+        if (hCoreWnd) {
+            Wh_Log(L"Uninitializing - Found core window");
+            RunFromWindowThread(
+                hCoreWnd, [](PVOID) { StartMenuUI::Uninit(); }, nullptr);
+        }
     }
 }
 void Wh_ModUninitStartButtonPosition() {if(true)return;
-    RestoreMenuPositions();
+    if (g_target == Target::Explorer) {
+        RestoreMenuPositions();
+    }
 }
-void Wh_ModSettingsChangedStartButtonPosition() {
-    RestoreMenuPositions();
+BOOL Wh_ModSettingsChangedStartButtonPosition() {
+    if (g_target == Target::Explorer) {
+        RestoreMenuPositions();
+    }
     LoadSettingsStartButtonPosition();
+    if (g_target == Target::StartMenuExperienceHost) {
+        if (!g_settings_startbuttonposition.startMenuOnTheLeft) {
+            return FALSE;
+        }
+        HWND hCoreWnd = StartMenuUI::GetCoreWnd();
+        if (hCoreWnd) {
+            Wh_Log(L"Applying settings - Found core window");
+            RunFromWindowThread(
+                hCoreWnd, [](PVOID) { StartMenuUI::SettingsChanged(); },
+                nullptr);
+        }
+    }
+    return TRUE;
 }

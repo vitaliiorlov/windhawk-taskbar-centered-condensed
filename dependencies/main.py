@@ -83,8 +83,30 @@ class URLProcessor(ABC):
         content = re.sub(r"Wh_ModAfterInit\(\)", r"Wh_ModAfterInit" + self.name + "()", content, flags=re.DOTALL)
         content = re.sub(r"Wh_ModBeforeUninit\(\)", r"Wh_ModBeforeUninit" + self.name + "()", content, flags=re.DOTALL)
         content = re.sub(r"Wh_ModUninit\(\)", r"Wh_ModUninit" + self.name + "()", content, flags=re.DOTALL)
-        content = re.sub(r"Wh_ModSettingsChanged\(\)", r"Wh_ModSettingsChanged" + self.name + "()", content, flags=re.DOTALL)
+        # Upstream's b_ recently changed `void Wh_ModSettingsChanged()` to
+        # `BOOL Wh_ModSettingsChanged(BOOL* bReload)`. Accept any arg list so
+        # we still match (and so the renamed function takes no args, which is
+        # what the outer dispatcher in win-dock-mod.cpp calls). The body
+        # returns BOOL — we keep that return type unchanged; the caller just
+        # discards the return value.
+        content = re.sub(r"Wh_ModSettingsChanged\([^)]*\)", r"Wh_ModSettingsChanged" + self.name + "()", content, flags=re.DOTALL)
         content = re.sub(r"g_taskbarViewDllLoaded", r"g_taskbarViewDllLoaded" + self.name, content, flags=re.DOTALL)
+        # Fork-specific: neuter upstream's ExperienceToggleButton_UpdateButtonPadding_Hook.
+        # Upstream mutates the start-button's inner ExperienceToggleButtonRootPanel
+        # (Width 45->55, Padding {2,4,2,4}->{12,4,2,4}) for their own Win11
+        # compatibility tuning. Our WinDock layout already styles this panel via
+        # mod-parts/win-dock-mod.cpp (Margin{0,0,0,0} + MinWidth on outer button),
+        # and upstream's mutations cause the start icon to disappear at our taskbar
+        # sizes. Inject an early `return;` right after the Original call so the
+        # hook is installed (preserving upstream's call chain) but does nothing
+        # beyond invoking the real UpdateButtonPadding. Matches both a_'s bare
+        # `_Hook` and b_'s renamed `_Hook_StartButtonPosition`.
+        content = re.sub(
+            r"(void WINAPI ExperienceToggleButton_UpdateButtonPadding_Hook[A-Za-z_]*\(void\* pThis\) \{\s*ExperienceToggleButton_UpdateButtonPadding_Original\(pThis\);)",
+            r"\1\n    return;  // fork: skip upstream's start-button panel mutations",
+            content,
+            flags=re.DOTALL,
+        )
         content = self.format_content(content)
         content = re.sub(r"^\s+//\s.*?$", "\n", content, flags=re.DOTALL | re.MULTILINE)
         content = re.sub("\n+", "\n", content, flags=re.DOTALL | re.MULTILINE)
@@ -177,7 +199,13 @@ class StartButtonPosition(URLProcessor):
         content = re.sub(r"typedef enum MONITOR_DPI_TYPE {.*?} MONITOR_DPI_TYPE;", "", content, flags=re.DOTALL)
         content = re.sub(r"} g_settings_startbuttonposition;", ";bool MoveFlyoutNotificationCenter=true;} g_settings_startbuttonposition;", content, flags=re.DOTALL)
 
-        content = re.sub(r"HRESULT WINAPI IUIElement_Arrange_Hook", "HRESULT WINAPI IUIElement_Arrange_Hook_" + self.name, content, flags=re.DOTALL)
+        # Rename every occurrence of IUIElement_Arrange_Hook (definition AND
+        # references). Word boundary keeps `IUIElement_Arrange_Original` and
+        # `IUIElement_Arrange_t` untouched (no `_Hook` substring). The old
+        # version of this regex only matched at the function definition, which
+        # left a dangling reference in upstream's new
+        # TaskbarCollapsibleLayoutXamlTraits_ArrangeOverride_Hook.
+        content = re.sub(r"\bIUIElement_Arrange_Hook\b", "IUIElement_Arrange_Hook_" + self.name, content, flags=re.DOTALL)
         content = re.sub(r"std::wstring processFileName = GetProcessFileName\(processId\);",
                          "TCHAR className[256];GetClassName(hwnd, className, 256);std::wstring windowClassName(className);\nstd::wstring processFileName = GetProcessFileName(processId);\nWh_Log(L\"process: %s, windowClassName: %s\",processFileName.c_str(),windowClassName.c_str());", content,
                          flags=re.MULTILINE | re.DOTALL)
@@ -278,6 +306,12 @@ SetWindowPos""", content, flags=re.MULTILINE | re.DOTALL)
         content = re.sub(r"HWND FindCurrentProcessTaskbarWnd\(.*?(?:^}$)", "", content, flags=re.MULTILINE | re.DOTALL)
         content = re.sub(r"AugmentedEntryPointButton_UpdateButtonPadding_t[\s\w\d]*?AugmentedEntryPointButton_UpdateButtonPadding_Original;", "", content, flags=re.MULTILINE | re.DOTALL)
         content = re.sub(r"AugmentedEntryPointButton_UpdateButtonPadding_Hook", "AugmentedEntryPointButton_UpdateButtonPadding_Hook_" + self.name, content, flags=re.MULTILINE | re.DOTALL)
+        # Upstream now also adds an `ExperienceToggleButton_UpdateButtonPadding`
+        # hook in BOTH a_ and b_ sources. Same dedupe strategy: drop the
+        # typedef + _Original in b_ (a_ keeps its copy) and suffix b_'s
+        # _Hook function with our mod name to avoid a duplicate definition.
+        content = re.sub(r"ExperienceToggleButton_UpdateButtonPadding_t[\s\w\d]*?ExperienceToggleButton_UpdateButtonPadding_Original;", "", content, flags=re.MULTILINE | re.DOTALL)
+        content = re.sub(r"ExperienceToggleButton_UpdateButtonPadding_Hook", "ExperienceToggleButton_UpdateButtonPadding_Hook_" + self.name, content, flags=re.MULTILINE | re.DOTALL)
         content = re.sub(r"HookTaskbarViewDllSymbols", "HookTaskbarViewDllSymbols" + self.name, content, flags=re.MULTILINE | re.DOTALL)
         content = re.sub(r"HMODULE GetTaskbarViewModuleHandle\(.*?(?:^}$)", "", content, flags=re.MULTILINE | re.DOTALL)
         content = re.sub(r"LoadLibraryExW_t LoadLibraryExW_Original;", "", content, flags=re.MULTILINE | re.DOTALL)
@@ -289,7 +323,13 @@ SetWindowPos""", content, flags=re.MULTILINE | re.DOTALL)
 
         content = re.sub(r"margin\.Right = 0;", "", content, flags=re.DOTALL | re.MULTILINE)
         content = re.sub(r"margin\.Right = -width;", "", content, flags=re.DOTALL)
-        content = re.sub(r"return IUIElement_Arrange_Original\(pThis, &newRect\);", "return original();", content, flags=re.DOTALL)
+        # Replace the call that arranges with our X=0-modified newRect by one
+        # that re-runs the original arrange with the ORIGINAL rect. This
+        # neutralizes upstream's "anchor start button to X=0" behavior which
+        # hides the icon in our centered/condensed taskbar layout. Made the
+        # `&` optional so this still works after upstream switched the
+        # signature from `Rect const*` to `Rect` (by value).
+        content = re.sub(r"return IUIElement_Arrange_Original\(pThis, &?newRect\);", "return original();", content, flags=re.DOTALL)
         content = re.sub(r"if \(!ApplyStyle\(xamlRoot\)\) \{.*?}",
                          r"""
 const auto xamlRootContent = xamlRoot.Content().try_as<FrameworkElement>();
@@ -330,6 +370,28 @@ bool HookTaskbarViewDllSymbolsStartButtonPosition(HMODULE module) {{""", content
 g_settings_startbuttonposition.MoveFlyoutNotificationCenter = Wh_GetIntSetting(L"MoveFlyoutNotificationCenter");
 """, content, flags=re.MULTILINE | re.DOTALL)
         content = re.sub(r"Wh_GetIntSetting\(L\"startMenuWidth\"\);", "660;", content, flags=re.MULTILINE | re.DOTALL)
+
+        # ----------------------------------------------------------------
+        # Replace upstream's DwmSetWindowAttribute_Hook with our unified
+        # per-monitor popup-placement hook (multi-monitor + mixed-DPI +
+        # toast-filter + %TEMP% file logging). Kept in mod-parts/ so it
+        # survives clean regens. Match runs LAST so any earlier regex
+        # modifications inside upstream's hook get wholesale overwritten.
+        # ----------------------------------------------------------------
+        popup_hook_replacement = read_file(os.path.join(mod_parts_dir, "popup-placement-hook.cpp")).strip()
+        content, n_popup_hook = re.subn(
+            r"using DwmSetWindowAttribute_t = decltype\(&DwmSetWindowAttribute\);.*?^\}\s*(?=namespace StartMenuUI)",
+            lambda _: popup_hook_replacement + "\n",
+            content,
+            flags=re.DOTALL | re.MULTILINE,
+        )
+        if n_popup_hook != 1:
+            raise RuntimeError(
+                f"popup-placement-hook injection: expected 1 match in upstream "
+                f"DwmSetWindowAttribute_Hook block, got {n_popup_hook}. The "
+                f"upstream source likely changed shape — update the regex in "
+                f"dependencies/main.py."
+            )
 
         content = "bool ApplyStyle(FrameworkElement const& element, std::wstring monitorName);\nbool InitializeDebounce();\nDispatcherTimer debounceTimer{nullptr};\n\n" + content
         return content
