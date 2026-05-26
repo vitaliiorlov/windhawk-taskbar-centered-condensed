@@ -41,19 +41,19 @@ Transform your Windows 11 taskbar into a smooth, MacOS-style dock — without lo
 >
 > ### Building this fork
 >
-> Running `python assemble-mod.py` directly **does not work** —
-> upstream's regex-regen pipeline in `dependencies/main.py` has
-> drifted against current ramensoftware sources. To rebuild
-> `assembled-mod.cpp` from the source files, skip the upstream regen
-> step with this one-liner:
->
 > ```powershell
-> python -c "import runpy; ns=runpy.run_path('assemble-mod.py', run_name='not_main'); ns['main']()"
+> python assemble-mod.py
 > ```
 >
-> `dependencies/modified-dependencies/b_taskbar-start-button-position.wh.cpp`
-> in this fork is hand-edited (contains the unified popup placement
-> logic). Re-running the upstream regen would overwrite it.
+> The regen pipeline in `dependencies/main.py` fetches latest
+> `taskbar-icon-size.wh.cpp` and `taskbar-start-button-position.wh.cpp`
+> from ramensoftware on each run, then re-applies our fork-specific
+> patches. The fork's unified popup-placement hook lives in
+> `mod-parts/popup-placement-hook.cpp` and is injected into the
+> regenerated `b_taskbar-start-button-position.wh.cpp` — so a clean
+> regen never overwrites it. If you edit the hook, edit that file (not
+> the file under `dependencies/modified-dependencies/`, which is
+> regenerated output).
 >
 > ### Diagnostic logging
 >
