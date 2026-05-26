@@ -2,7 +2,7 @@
 // @id              taskbar-dock-like
 // @name            WinDock (taskbar as a dock) for Windows 11
 // @description     Centers and floats the taskbar, moves the system tray next to the task area, and serves as an all-in-one, one-click mod to transform the taskbar into a macOS-style dock. Based on m417z's code. For Windows 11.
-// @version         1.4.248
+// @version         1.4.249
 // @author          DarkionAvey
 // @github          https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed
 // @include         explorer.exe
@@ -3274,7 +3274,20 @@ Wh_Log(L"process: %s, windowClassName: %s",processFileName.c_str(),windowClassNa
             g_searchMenuWnd = hwnd;
             g_searchMenuOriginalX = targetRect.left;
         } else /* Target::ShellExperienceHost */ {
-            // Right-aligned with taskbar; keep Windows' cx/cy (NC is tall).
+            // ShellExperienceHost.exe owns BOTH the Notification Center
+            // (full-monitor-height sidebar on the right) AND toast
+            // notifications (small popups at bottom-right). They come
+            // through this same hook. We discriminate by height:
+            //   Notification Center: cy ≈ monitor height (1500-2100 px)
+            //   Toast notification:  cy ≈ 100-300 px (well under half)
+            // For toasts, Windows already places them correctly at the
+            // bottom-right corner — we must NOT move them. Returning
+            // original() skips both our SetWindowPos and the file log.
+            if (cy < monH / 2) {
+  Wh_Log(L".");
+                return original();  // toast — leave Windows' positioning alone
+            }
+            // Notification Center: right-aligned with taskbar, top-anchored.
             int xLocal = MulDiv(tbarRightDIPs, monitorDpiX, 96) - cx;
             if (xLocal < 10) xLocal = 10;
             if (xLocal + cx > monW - 10) xLocal = monW - cx - 10;
