@@ -655,7 +655,10 @@ bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorNam
   bool isOverflowing = overflowButton != nullptr && !IsWeirdFrameworkElement(overflowButton);
 
   double rootWidth = xamlRootContent.ActualWidth();
-  state.lastRootWidth = static_cast<float>(rootWidth);
+  // Round to whole pixels: rootWidth comes from XAML ActualWidth() which can
+  // drift sub-pixel between ApplyStyle runs, causing the Start/Search popup
+  // position math to read slightly different values on every popup open.
+  state.lastRootWidth = std::floor(static_cast<float>(rootWidth));
 
   if (!g_unloading && rootWidth < 100) {
     Wh_Log(L"root width is too small");
@@ -777,7 +780,12 @@ bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorNam
     Wh_Log(L"Error: targetWidth<1");
     return false;
   }
-  state.lastStartButtonXCalculated = (rootWidth - targetWidth) / 2.0f;
+  // Round to a whole pixel. These values come from XAML ActualWidth() which
+  // can drift by sub-pixel amounts between ApplyStyle runs; without rounding,
+  // the Start/Search popup positioning math (in DwmSetWindowAttribute_Hook)
+  // reads slightly different values on every popup open, causing visible
+  // pixel jitter.
+  state.lastStartButtonXCalculated = std::floor((rootWidth - targetWidth) / 2.0f);
 
   auto heightValue = (g_settings.userDefinedTaskbarHeight + abs(userDefinedTaskbarOffsetY < 0 ? (userDefinedTaskbarOffsetY * 2) : 0));
 
@@ -1028,8 +1036,9 @@ bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorNam
   }
 
   state.wasOverflowing = isOverflowing;
-  state.lastTargetWidth = targetWidthRect;
-  state.lastTargetWidth = targetWidth;
+  // Round to whole pixels for the same reason as lastStartButtonXCalculated:
+  // popup positioning math reads this and must get stable inputs.
+  state.lastTargetWidth = std::floor(targetWidth);
 
   // Resize the taskbar window's clickable region to match the visible taskbar.
   // When the mod is unloading or running in full-width mode we clear the region
