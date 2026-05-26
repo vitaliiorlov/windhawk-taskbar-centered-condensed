@@ -1,4 +1,4 @@
-![Screenshot](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/raw/main/screenshot.png)
+![Screenshot](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed/raw/main/screenshot.png)
 
 # WinDock Windhawk Mod
 
