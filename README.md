@@ -6,13 +6,81 @@ Transform your Windows 11 taskbar into a smooth, MacOS-style dock — without lo
 
 ---
 
+> ## 🍴 This is a personal fork
+>
+> Upstream: [DarkionAvey/windhawk-taskbar-centered-condensed](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed).
+> This fork ([vitaliiorlov/windhawk-taskbar-centered-condensed](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed))
+> contains a few fixes I needed on my own machine, listed below.
+>
+> ### What's different from upstream
+>
+> 1. **Clickable taskbar area matches the visible taskbar.**
+>    Upstream visually condenses the taskbar but `Shell_TrayWnd` itself
+>    stays full screen width, so right-clicks (and the "Task Manager /
+>    Taskbar settings" menu) hit the empty strips on either side. This
+>    fork uses `SetWindowRgn` to make the OS only route mouse input to
+>    pixels inside the visible taskbar. Also proposed upstream as
+>    [PR #19](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/pull/19).
+>
+> 2. **Start menu, Search popup and Notification Center work correctly
+>    on multi-monitor + mixed-DPI setups.**
+>    The popup placement in `DwmSetWindowAttribute_Hook` was rewritten
+>    into a single unified design: all math in DIPs in monitor-local
+>    coordinates, with explicit cursor-based monitor detection, a
+>    cached "natural primary DIPs" size for Search, Y anchored just
+>    above the visible taskbar, and a final safety clamp. Fixes
+>    secondary-monitor positioning, mixed-DPI sizing, search popup
+>    drift between launches, content cut-off on high-DPI monitors,
+>    and the `Start menu doesn't appear` Int-overflow bug.
+>
+> 3. **Toast notifications are no longer hijacked.**
+>    The Notification-Center positioning code used to also catch
+>    toast notifications (same `ShellExperienceHost.exe` process) and
+>    yank them to the top of the screen. The hook now discriminates
+>    by popup height and lets Windows handle toasts natively.
+>
+> ### Building this fork
+>
+> Running `python assemble-mod.py` directly **does not work** —
+> upstream's regex-regen pipeline in `dependencies/main.py` has
+> drifted against current ramensoftware sources. To rebuild
+> `assembled-mod.cpp` from the source files, skip the upstream regen
+> step with this one-liner:
+>
+> ```powershell
+> python -c "import runpy; ns=runpy.run_path('assemble-mod.py', run_name='not_main'); ns['main']()"
+> ```
+>
+> `dependencies/modified-dependencies/b_taskbar-start-button-position.wh.cpp`
+> in this fork is hand-edited (contains the unified popup placement
+> logic). Re-running the upstream regen would overwrite it.
+>
+> ### Diagnostic logging
+>
+> The popup hook writes one structured line per popup-open to
+> `%TEMP%\windhawk_popup_log.txt`. Useful for debugging multi-monitor
+> placement issues. Disable by removing the `FILE* f = nullptr; ...
+> fclose(f);` block in
+> `dependencies/modified-dependencies/b_taskbar-start-button-position.wh.cpp`
+> if you don't want it.
+>
+> ### Known limitations
+>
+> Hardcoded Search popup natural-size constants (858 × 890 DIPs)
+> are tuned for Win11 24H2 and the typical default. The cache
+> snapshots the user's actual value when Search is opened on the
+> primary monitor, so other Win11 versions adapt automatically once
+> Search opens there at least once.
+
+---
+
 ## 🚀 How to Install (Development Build)
 
 ⚠️ **Note:** Please disable any mods that affect taskbar height or taskbar icons—this mod already includes those
 features.
 1. [Install Windhawk](https://windhawk.net/) if you haven't already.
 2. Copy the contents of [
-   `assembled-mod.cpp`](https://raw.githubusercontent.com/DarkionAvey/windhawk-taskbar-centered-condensed/main/assembled-mod.cpp)
+   `assembled-mod.cpp`](https://raw.githubusercontent.com/vitaliiorlov/windhawk-taskbar-centered-condensed/main/assembled-mod.cpp)
    to your clipboard.
 3. Open **WindHawk** and navigate to: `Explore` → `Create a new mod`.
 4. Press `Ctrl+A` to select all, then `Ctrl+V` to paste.
