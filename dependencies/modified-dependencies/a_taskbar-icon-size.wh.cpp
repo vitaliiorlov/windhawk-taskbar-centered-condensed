@@ -105,6 +105,7 @@ static std::unordered_map<std::wstring, TaskbarState> g_taskbarStates;
   unsigned int borderColorR, borderColorG, borderColorB;
   std::vector<std::wstring> userDefinedDividedAppNames;
   bool userDefinedAlignFlyoutInner;
+  bool userDefinedNotificationCenterPrimaryOnly;
   bool userDefinedCustomizeTaskbarBackground;
   double userDefinedAppsDividerThickness;
   float userDefinedAppsDividerVerticalScale{0.7};

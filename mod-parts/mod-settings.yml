@@ -148,3 +148,8 @@
   $name: Align flyout windows to the inside of the taskbar
   $description: When enabled, the flyout windows will be aligned within the bounds of the taskbar. When off, they will be 50% inside the taskbar bounds (Default is on).
   $type: bool
+
+- NotificationCenterPrimaryOnly: false
+  $name: Notification Center on primary monitor only
+  $description: When enabled, the Notification Center (the clock/calendar popup) is only repositioned when opened on the primary monitor. On secondary monitors it appears at Windows' native default position. Only affects Notification Center — Start Menu, Search, and Control Center are unaffected. (Default is off)
+  $type: bool

@@ -2,7 +2,7 @@
 // @id              taskbar-dock-like
 // @name            WinDock (taskbar as a dock) for Windows 11
 // @description     Centers and floats the taskbar, moves the system tray next to the task area, and serves as an all-in-one, one-click mod to transform the taskbar into a macOS-style dock. Based on m417z's code. For Windows 11.
-// @version         1.4.266
+// @version         1.4.270
 // @author          DarkionAvey
 // @github          https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed
 // @include         explorer.exe
@@ -154,6 +154,7 @@ Huge thanks to these awesome developers who made this mod possible -- your contr
 | `MoveFlyoutControlCenter` | Move Control Center with Taskbar | When enabled, the Control Center is moved to align with taskbar size and location (Default is on). | Boolean (true/false) |
 | `MoveFlyoutNotificationCenter` | Move Notification Center with Taskbar | When enabled, the Notification Center is moved to align with taskbar size and location (Default is on). | Boolean (true/false) |
 | `AlignFlyoutInner` | Align flyout windows to the inside of the taskbar | When enabled, the flyout windows will be aligned within the bounds of the taskbar. When off, they will be 50% inside the taskbar bounds (Default is on). | Boolean (true/false) |
+| `NotificationCenterPrimaryOnly` | Notification Center on primary monitor only | When enabled, the Notification Center (the clock/calendar popup) is only repositioned when opened on the primary monitor. On secondary monitors it appears at Windows' native default position. Only affects Notification Center — Start Menu, Search, and Control Center are unaffected. (Default is off) | Boolean (true/false) |
 */
 // ==/WindhawkModReadme==
 // ==WindhawkModSettings==
@@ -250,6 +251,9 @@ Huge thanks to these awesome developers who made this mod possible -- your contr
 - AlignFlyoutInner: true
   $name: Align flyout windows to the inside of the taskbar
   $description: When enabled, the flyout windows will be aligned within the bounds of the taskbar. When off, they will be 50% inside the taskbar bounds (Default is on).
+- NotificationCenterPrimaryOnly: false
+  $name: Notification Center on primary monitor only
+  $description: When enabled, the Notification Center (the clock/calendar popup) is only repositioned when opened on the primary monitor. On secondary monitors it appears at Windows' native default position. Only affects Notification Center — Start Menu, Search, and Control Center are unaffected. (Default is off)
 */
 // ==/WindhawkModSettings==
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -359,6 +363,7 @@ static std::unordered_map<std::wstring, TaskbarState> g_taskbarStates;
   unsigned int borderColorR, borderColorG, borderColorB;
   std::vector<std::wstring> userDefinedDividedAppNames;
   bool userDefinedAlignFlyoutInner;
+  bool userDefinedNotificationCenterPrimaryOnly;
   bool userDefinedCustomizeTaskbarBackground;
   double userDefinedAppsDividerThickness;
   float userDefinedAppsDividerVerticalScale{0.7};
@@ -3533,6 +3538,36 @@ HRESULT WINAPI DwmSetWindowAttribute_Hook(HWND hwnd,
     TCHAR className[256];GetClassName(hwnd, className, 256);std::wstring windowClassName(className);
 std::wstring processFileName = GetProcessFileName(processId);
 Wh_Log(L"process: %s, windowClassName: %s",processFileName.c_str(),windowClassName.c_str());
+    {
+        POINT diagCursor0 = {-1, -1};
+        GetCursorPos(&diagCursor0);
+        RECT diagRect0 = {};
+        GetWindowRect(hwnd, &diagRect0);
+        FILE* f = nullptr;
+        WCHAR logPath[MAX_PATH];
+        if (GetEnvironmentVariableW(L"TEMP", logPath, MAX_PATH)) {
+  Wh_Log(L".");
+            wcscat_s(logPath, MAX_PATH, L"\\windhawk_popup_log.txt");
+            _wfopen_s(&f, logPath, L"a, ccs=UTF-8");
+            if (f) {
+  Wh_Log(L".");
+                SYSTEMTIME st;
+                GetLocalTime(&st);
+                fwprintf(f,
+                         L"%02d:%02d:%02d.%03d HOOK_ENTRY proc=%s class=%s "
+                         L"hwnd=%p rect=(%ld,%ld,cx=%ld,cy=%ld) cursor=(%ld,%ld)\n",
+                         st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+                         processFileName.c_str(),
+                         windowClassName.c_str(),
+                         hwnd,
+                         diagRect0.left, diagRect0.top,
+                         diagRect0.right - diagRect0.left,
+                         diagRect0.bottom - diagRect0.top,
+                         diagCursor0.x, diagCursor0.y);
+                fclose(f);
+            }
+        }
+    }
     enum class Target {
         StartMenu,
         SearchHost,ShellExperienceHost,
@@ -3549,6 +3584,36 @@ Wh_Log(L"process: %s, windowClassName: %s",processFileName.c_str(),windowClassNa
   Wh_Log(L".");
         target = Target::ShellExperienceHost;
     }  else {
+        {
+            POINT diagCursor = {-1, -1};
+            GetCursorPos(&diagCursor);
+            RECT diagRect = {};
+            GetWindowRect(hwnd, &diagRect);
+            FILE* f = nullptr;
+            WCHAR logPath[MAX_PATH];
+            if (GetEnvironmentVariableW(L"TEMP", logPath, MAX_PATH)) {
+  Wh_Log(L".");
+                wcscat_s(logPath, MAX_PATH, L"\\windhawk_popup_log.txt");
+                _wfopen_s(&f, logPath, L"a, ccs=UTF-8");
+                if (f) {
+  Wh_Log(L".");
+                    SYSTEMTIME st;
+                    GetLocalTime(&st);
+                    fwprintf(f,
+                             L"%02d:%02d:%02d.%03d UNHANDLED proc=%s class=%s "
+                             L"hwnd=%p rect=(%ld,%ld,cx=%ld,cy=%ld) cursor=(%ld,%ld)\n",
+                             st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+                             processFileName.c_str(),
+                             windowClassName.c_str(),
+                             hwnd,
+                             diagRect.left, diagRect.top,
+                             diagRect.right - diagRect.left,
+                             diagRect.bottom - diagRect.top,
+                             diagCursor.x, diagCursor.y);
+                    fclose(f);
+                }
+            }
+        }
         return original();
     }
     HMONITOR monitor = nullptr;
@@ -3585,13 +3650,17 @@ Wh_Log(L"process: %s, windowClassName: %s",processFileName.c_str(),windowClassNa
     int y = targetRect.top;
     int cx = targetRect.right - targetRect.left;
     int cy = targetRect.bottom - targetRect.top;
+    HMONITOR primaryMonitor = MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
     bool moveStartSetting = g_settings_startbuttonposition.startMenuOnTheLeft;
     bool moveNCSetting    = g_settings_startbuttonposition.MoveFlyoutNotificationCenter;
+    bool onPrimary         = (monitor == primaryMonitor);
+    bool ncPrimaryOnlyMode = g_settings.userDefinedNotificationCenterPrimaryOnly;
+    bool ncWantPlace       = moveNCSetting && (!ncPrimaryOnlyMode || onPrimary);
     bool wantPlace =
         !g_unloading &&
         ((target == Target::StartMenu          && moveStartSetting) ||
          (target == Target::SearchHost         && moveStartSetting) ||
-         (target == Target::ShellExperienceHost && moveNCSetting));
+         (target == Target::ShellExperienceHost && ncWantPlace));
     if (wantPlace) {
   Wh_Log(L".");
         static int g_naturalSearchCxDIPs = 0;
@@ -3602,7 +3671,6 @@ Wh_Log(L"process: %s, windowClassName: %s",processFileName.c_str(),windowClassNa
             const int kMinNaturalDIPs      = 700;
             const int kMaxNaturalDIPs      = 950;
             HMONITOR popupMon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-            HMONITOR primaryMonitor = MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
             if (target == Target::SearchHost &&
                 popupMon == primaryMonitor &&
                 monitor == primaryMonitor) {
@@ -4825,6 +4893,7 @@ void UpdateGlobalSettings() {
   g_settings.userDefinedTrayAreaDivider = (getInt(L"TrayAreaDivider") != 0) && !g_unloading;
   g_settings.userDefinedStyleTrayArea = (getInt(L"StyleTrayArea") != 0);
   g_settings.userDefinedAlignFlyoutInner = (getInt(L"AlignFlyoutInner") != 0);
+  g_settings.userDefinedNotificationCenterPrimaryOnly = (getInt(L"NotificationCenterPrimaryOnly") != 0);
   g_settings.userDefinedCustomizeTaskbarBackground = (getInt(L"CustomizeTaskbarBackground") != 0);
   PCWSTR appsDividerAlignment = Wh_GetStringSetting(L"AppsDividerAlignment");
   g_settings.userDefinedDividerLeftAligned = (_wcsicmp(appsDividerAlignment, L"left") == 0);

@@ -746,6 +746,34 @@ HRESULT WINAPI DwmSetWindowAttribute_Hook(HWND hwnd,
     TCHAR className[256];GetClassName(hwnd, className, 256);std::wstring windowClassName(className);
 std::wstring processFileName = GetProcessFileName(processId);
 Wh_Log(L"process: %s, windowClassName: %s",processFileName.c_str(),windowClassName.c_str());
+    {
+        POINT diagCursor0 = {-1, -1};
+        GetCursorPos(&diagCursor0);
+        RECT diagRect0 = {};
+        GetWindowRect(hwnd, &diagRect0);
+        FILE* f = nullptr;
+        WCHAR logPath[MAX_PATH];
+        if (GetEnvironmentVariableW(L"TEMP", logPath, MAX_PATH)) {
+            wcscat_s(logPath, MAX_PATH, L"\\windhawk_popup_log.txt");
+            _wfopen_s(&f, logPath, L"a, ccs=UTF-8");
+            if (f) {
+                SYSTEMTIME st;
+                GetLocalTime(&st);
+                fwprintf(f,
+                         L"%02d:%02d:%02d.%03d HOOK_ENTRY proc=%s class=%s "
+                         L"hwnd=%p rect=(%ld,%ld,cx=%ld,cy=%ld) cursor=(%ld,%ld)\n",
+                         st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+                         processFileName.c_str(),
+                         windowClassName.c_str(),
+                         hwnd,
+                         diagRect0.left, diagRect0.top,
+                         diagRect0.right - diagRect0.left,
+                         diagRect0.bottom - diagRect0.top,
+                         diagCursor0.x, diagCursor0.y);
+                fclose(f);
+            }
+        }
+    }
     enum class Target {
         StartMenu,
         SearchHost,ShellExperienceHost,
@@ -759,6 +787,34 @@ Wh_Log(L"process: %s, windowClassName: %s",processFileName.c_str(),windowClassNa
     }else if (_wcsicmp(processFileName.c_str(), L"ShellExperienceHost.exe") == 0) {
         target = Target::ShellExperienceHost;
     }  else {
+        {
+            POINT diagCursor = {-1, -1};
+            GetCursorPos(&diagCursor);
+            RECT diagRect = {};
+            GetWindowRect(hwnd, &diagRect);
+            FILE* f = nullptr;
+            WCHAR logPath[MAX_PATH];
+            if (GetEnvironmentVariableW(L"TEMP", logPath, MAX_PATH)) {
+                wcscat_s(logPath, MAX_PATH, L"\\windhawk_popup_log.txt");
+                _wfopen_s(&f, logPath, L"a, ccs=UTF-8");
+                if (f) {
+                    SYSTEMTIME st;
+                    GetLocalTime(&st);
+                    fwprintf(f,
+                             L"%02d:%02d:%02d.%03d UNHANDLED proc=%s class=%s "
+                             L"hwnd=%p rect=(%ld,%ld,cx=%ld,cy=%ld) cursor=(%ld,%ld)\n",
+                             st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+                             processFileName.c_str(),
+                             windowClassName.c_str(),
+                             hwnd,
+                             diagRect.left, diagRect.top,
+                             diagRect.right - diagRect.left,
+                             diagRect.bottom - diagRect.top,
+                             diagCursor.x, diagCursor.y);
+                    fclose(f);
+                }
+            }
+        }
         return original();
     }
     HMONITOR monitor = nullptr;
@@ -791,13 +847,17 @@ Wh_Log(L"process: %s, windowClassName: %s",processFileName.c_str(),windowClassNa
     int y = targetRect.top;
     int cx = targetRect.right - targetRect.left;
     int cy = targetRect.bottom - targetRect.top;
+    HMONITOR primaryMonitor = MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
     bool moveStartSetting = g_settings_startbuttonposition.startMenuOnTheLeft;
     bool moveNCSetting    = g_settings_startbuttonposition.MoveFlyoutNotificationCenter;
+    bool onPrimary         = (monitor == primaryMonitor);
+    bool ncPrimaryOnlyMode = g_settings.userDefinedNotificationCenterPrimaryOnly;
+    bool ncWantPlace       = moveNCSetting && (!ncPrimaryOnlyMode || onPrimary);
     bool wantPlace =
         !g_unloading &&
         ((target == Target::StartMenu          && moveStartSetting) ||
          (target == Target::SearchHost         && moveStartSetting) ||
-         (target == Target::ShellExperienceHost && moveNCSetting));
+         (target == Target::ShellExperienceHost && ncWantPlace));
     if (wantPlace) {
         static int g_naturalSearchCxDIPs = 0;
         static int g_naturalSearchCyDIPs = 0;
@@ -807,7 +867,6 @@ Wh_Log(L"process: %s, windowClassName: %s",processFileName.c_str(),windowClassNa
             const int kMinNaturalDIPs      = 700;
             const int kMaxNaturalDIPs      = 950;
             HMONITOR popupMon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-            HMONITOR primaryMonitor = MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
             if (target == Target::SearchHost &&
                 popupMon == primaryMonitor &&
                 monitor == primaryMonitor) {
