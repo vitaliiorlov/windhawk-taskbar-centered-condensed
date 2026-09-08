@@ -1489,6 +1489,7 @@ HWND GetCoreWnd() {
         (LPARAM)&param);
     return hWnd;
 }
+void ApplyStyle();
 void ApplyStyleClassicStartMenu(FrameworkElement content, HMONITOR monitor) {
     ApplyStyle(content, GetMonitorName(monitor));
 }

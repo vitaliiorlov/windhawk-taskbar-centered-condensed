@@ -98,7 +98,14 @@ class StartButtonPosition(URLProcessor):
             required=False,
         )
         patch.remove_literal("std::atomic<bool> g_unloading;")
-        patch.remove_literal("void ApplyStyle();")
+        # NOTE: upstream used to strip `void ApplyStyle();` here, presumably to
+        # clear a global forward declaration that clashed with the injected
+        # `bool ApplyStyle(FrameworkElement const&, std::wstring)`. In current
+        # ramensoftware sources the only occurrence lives inside
+        # `namespace StartMenuUI`, where it neither clashes (different scope and
+        # signature) nor is optional: StartMenuUI calls ApplyStyle() from a
+        # property-changed lambda before the definition, so removing the
+        # declaration breaks that call. Left in place deliberately.
         # ramensoftware no longer declares the MONITOR_DPI_TYPE typedef in this
         # mod (it comes from the taskbar-icon-size module, which is concatenated
         # first). remove_typedef_enum() has no `required` escape, so inline the
