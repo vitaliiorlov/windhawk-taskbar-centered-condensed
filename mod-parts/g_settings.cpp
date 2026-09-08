@@ -1,4 +1,7 @@
-struct {
+#include <mutex>
+#include <regex>
+
+struct ModSettings {
   int userDefinedTrayTaskGap;
   int userDefinedTaskbarBackgroundHorizontalPadding;
   unsigned int userDefinedTaskbarOffsetY;
@@ -13,6 +16,11 @@ struct {
   unsigned int userDefinedTaskbarBackgroundOpacity;
   unsigned int userDefinedTaskbarBackgroundTint;
   unsigned int userDefinedTaskbarBackgroundLuminosity;
+  unsigned int userDefinedTaskbarBackgroundBlurAmount;
+  std::wstring userDefinedTaskbarBackgroundTintColor;
+  unsigned int userDefinedTaskbarBackgroundTintSaturation;
+  unsigned int userDefinedTaskbarBackgroundInversion;
+  std::wstring userDefinedTaskbarBackgroundFallbackColor;
   uint8_t userDefinedTaskbarBorderOpacity;
   double userDefinedTaskbarBorderThickness;
   bool userDefinedFullWidthTaskbarBackground;
@@ -20,11 +28,19 @@ struct {
   bool userDefinedStyleTrayArea;
   bool userDefinedTrayAreaDivider;
   unsigned int borderColorR, borderColorG, borderColorB;
-  std::vector<std::wstring> userDefinedDividedAppNames;
+  std::vector<std::wregex> compiledDividedAppPatterns;
   bool userDefinedAlignFlyoutInner;
-  bool userDefinedNotificationCenterPrimaryOnly;
   bool userDefinedCustomizeTaskbarBackground;
+  bool userDefinedDisableCustomBlurBackground;
   double userDefinedAppsDividerThickness;
   float userDefinedAppsDividerVerticalScale{0.7};
   bool userDefinedDividerLeftAligned=false;
-} g_settings;
+};
+
+ModSettings g_settings;
+std::recursive_mutex g_settingsMutex;
+
+bool GetUserDefinedAlignFlyoutInner() {
+  std::lock_guard<std::recursive_mutex> lock(g_settingsMutex);
+  return g_settings.userDefinedAlignFlyoutInner;
+}

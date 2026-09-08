@@ -1,6 +1,7 @@
 import glob
 import os
 import re
+from pathlib import Path
 
 TYPE_MAP = {
     "signed int": "Integer (whole number)",
@@ -95,8 +96,28 @@ def get_next_patch_version(version_file_path):
     return patch_file + 1
 
 
-def main(major_minor="1.4"):
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+def get_compiler_options_string(base_dir: Path):
+    txt_dir = Path(base_dir / "dependencies" / "modified-dependencies" / "compiler-options-dump")
+    options = dict.fromkeys(
+        option
+        for txt in txt_dir.rglob("*.txt")
+        for option in txt.read_text(encoding="utf-8").split()
+    )
+
+    flags_to_remove = {"-Wl,--export-all-symbols", "-DWINVER=0x0A00"}
+
+    options = [
+        flag for flag in options
+        if flag not in flags_to_remove
+    ]
+
+    compiler_options = " ".join(options)
+    print(txt_dir)
+    return compiler_options
+
+
+def main(major_minor="1.0"):
+    base_dir = Path(os.path.dirname(os.path.abspath(__file__)))
     version_file_path = os.path.join(base_dir, 'mod-parts', 'mod-build-version.txt')
 
     if os.path.exists(version_file_path):
@@ -133,8 +154,10 @@ def main(major_minor="1.4"):
         f.write(new_readme_contents)
 
     new_readme_for_header = new_readme_contents  # Use the updated README
+    header_contents = header_contents.replace('{compiler_options}', get_compiler_options_string(base_dir))
     header_contents = header_contents.replace('{read_me_contents}', new_readme_for_header.strip())
-    header_contents = header_contents.replace('{mod_settings}', re.sub(r'^\s*\$type:.*$', '', mod_settings_contents, flags=re.MULTILINE).strip())
+    header_contents = header_contents.replace('{mod_settings}', re.sub(r'^\s*\$type:.*$', '', mod_settings_contents,
+                                                                       flags=re.MULTILINE).strip())
     header_contents = header_contents.replace('{version_code}', version)
 
     merged_contents = header_contents + "\n\n"
@@ -144,33 +167,32 @@ def main(major_minor="1.4"):
             merged_contents += f"{cpp_contents}\n\n"
 
     merged_contents = f"""
+    
 {merged_contents.strip()}
 
-{read_file(os.path.join(base_dir, 'mod-parts', 'ascii-art-and-imports.cpp')).strip()}
-
-{read_file(os.path.join(base_dir, 'mod-parts', 'utils-style-xml.cpp')).strip()}
-
-{read_file(os.path.join(base_dir, 'mod-parts', 'utils-string.cpp')).strip()}
-
-{read_file(os.path.join(base_dir, 'mod-parts', 'utils-debouncer.cpp')).strip()}
-
-{read_file(os.path.join(base_dir, 'mod-parts', 'utils-apply-style-helpers.cpp')).strip()}
+{read_file(os.path.join(base_dir, 'mod-parts', 'windhawk-brush.cpp')).strip()}
 
 {read_file(os.path.join(base_dir, 'mod-parts', 'win-dock-mod.cpp')).strip()}
+
 """
 
+    merged_contents = merged_contents.replace("LoadLibrary(L", "GetModuleHandle(L")
+    # formating
+    # merged_contents= re.sub(r'//.*$', '', merged_contents, flags=re.MULTILINE)
     merged_contents = re.sub(r'[ \t]*\n', '\n', merged_contents)  # remove whitespace-only lines
     merged_contents = re.sub(r'\n+', '\n', merged_contents).strip()
-    merged_contents = merged_contents.replace("LoadLibrary(L", "GetModuleHandle(L")
-    merged_contents = merged_contents.replace(") {", ") {\n  Wh_Log(L\".\");")
+    # merged_contents = merged_contents.replace(") {", ") {\n  Wh_Log(L\".\");\n")
     with open(output_path, 'w', encoding='utf-8') as f:
+        f.write(merged_contents)
+
+    with open(os.path.join(base_dir, 'taskbar-dock-like.wh.cpp'), 'w', encoding='utf-8') as f:
         f.write(merged_contents)
 
     print("Saved assembled mod")
 
 
 if __name__ == '__main__':
-    from dependencies import main as dependency_maker
+    from dependencies import main as fetcher
 
-    dependency_maker.process_all_mods()
-    main()
+    fetcher.process_all_mods()
+    main(major_minor="1.5")

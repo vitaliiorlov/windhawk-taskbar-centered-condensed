@@ -1,76 +1,13 @@
-![Screenshot](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed/raw/main/screenshot.png)
+![Screenshot](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/raw/main/screenshot.gif)
 
-# WinDock Windhawk Mod
+# TAI (Taskbar as (an) island) for Windows 11
 
-Transform your Windows 11 taskbar into a smooth, MacOS-style dock — without losing any of the original functionality!
+TAI lets you transform your Windows 11 taskbar into a smooth floating dock without losing any of the original taskbar functionality!
 
----
 
-> ## 🍴 This is a personal fork
->
-> Upstream: [DarkionAvey/windhawk-taskbar-centered-condensed](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed).
-> This fork ([vitaliiorlov/windhawk-taskbar-centered-condensed](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed))
-> contains a few fixes I needed on my own machine, listed below.
->
-> ### What's different from upstream
->
-> 1. **Clickable taskbar area matches the visible taskbar.**
->    Upstream visually condenses the taskbar but `Shell_TrayWnd` itself
->    stays full screen width, so right-clicks (and the "Task Manager /
->    Taskbar settings" menu) hit the empty strips on either side. This
->    fork uses `SetWindowRgn` to make the OS only route mouse input to
->    pixels inside the visible taskbar. Also proposed upstream as
->    [PR #19](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/pull/19).
->
-> 2. **Start menu, Search popup and Notification Center work correctly
->    on multi-monitor + mixed-DPI setups.**
->    The popup placement in `DwmSetWindowAttribute_Hook` was rewritten
->    into a single unified design: all math in DIPs in monitor-local
->    coordinates, with explicit cursor-based monitor detection, a
->    cached "natural primary DIPs" size for Search, Y anchored just
->    above the visible taskbar, and a final safety clamp. Fixes
->    secondary-monitor positioning, mixed-DPI sizing, search popup
->    drift between launches, content cut-off on high-DPI monitors,
->    and the `Start menu doesn't appear` Int-overflow bug.
->
-> 3. **Toast notifications are no longer hijacked.**
->    The Notification-Center positioning code used to also catch
->    toast notifications (same `ShellExperienceHost.exe` process) and
->    yank them to the top of the screen. The hook now discriminates
->    by popup height and lets Windows handle toasts natively.
->
-> ### Building this fork
->
-> ```powershell
-> python assemble-mod.py
-> ```
->
-> The regen pipeline in `dependencies/main.py` fetches latest
-> `taskbar-icon-size.wh.cpp` and `taskbar-start-button-position.wh.cpp`
-> from ramensoftware on each run, then re-applies our fork-specific
-> patches. The fork's unified popup-placement hook lives in
-> `mod-parts/popup-placement-hook.cpp` and is injected into the
-> regenerated `b_taskbar-start-button-position.wh.cpp` — so a clean
-> regen never overwrites it. If you edit the hook, edit that file (not
-> the file under `dependencies/modified-dependencies/`, which is
-> regenerated output).
->
-> ### Diagnostic logging
->
-> The popup hook writes one structured line per popup-open to
-> `%TEMP%\windhawk_popup_log.txt`. Useful for debugging multi-monitor
-> placement issues. Disable by removing the `FILE* f = nullptr; ...
-> fclose(f);` block in
-> `dependencies/modified-dependencies/b_taskbar-start-button-position.wh.cpp`
-> if you don't want it.
->
-> ### Known limitations
->
-> Hardcoded Search popup natural-size constants (858 × 890 DIPs)
-> are tuned for Win11 24H2 and the typical default. The cache
-> snapshots the user's actual value when Search is opened on the
-> primary monitor, so other Win11 versions adapt automatically once
-> Search opens there at least once.
+# Bug reports
+
+Please file bug reports here: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issues
 
 ---
 
@@ -80,14 +17,12 @@ Transform your Windows 11 taskbar into a smooth, MacOS-style dock — without lo
 features.
 1. [Install Windhawk](https://windhawk.net/) if you haven't already.
 2. Copy the contents of [
-   `assembled-mod.cpp`](https://raw.githubusercontent.com/vitaliiorlov/windhawk-taskbar-centered-condensed/main/assembled-mod.cpp)
+   `assembled-mod.cpp`](https://raw.githubusercontent.com/DarkionAvey/windhawk-taskbar-centered-condensed/main/assembled-mod.cpp)
    to your clipboard.
 3. Open **WindHawk** and navigate to: `Explore` → `Create a new mod`.
 4. Press `Ctrl+A` to select all, then `Ctrl+V` to paste.
 5. Click **Compile Mod** button on the top left corner.
 6. Change the mod's settings to fit your preference.
-7. If your explorer.exe is not responding, disable the mod from Windhawk, open task manager, restart explorer.exe, wait
-   for the default taskbar to appear, then apply WinDock.
 
 ---
 
@@ -101,24 +36,18 @@ modify the source files in the `mod-parts` directory.
 
 ---
 
-## 🛣️ To-do
-
-1. Proper unloading
-2. Fix overflowing
-
----
-
 ## 🙌 Credits
 
 Huge thanks to these awesome developers who made this mod possible -- your contributions to modding Windows are truly appreciated!:
 
 - [`Michael Maltsev (m417z)`](https://github.com/m417z)
 - [`Valentin Radu (valinet)`](https://github.com/valinet)
+- [`TranslucentTB team`](https://github.com/translucenttb/translucenttb)
 
 ---
 
 ## 🔥 Recommended Mods
-
+- [Taskbar Fluent Media Player](https://windhawk.net/mods/taskbar-fluent-media-player) \[Set player position to Tray\]
 - [Smart Auto Hide for Taskbar](https://windhawk.net/mods/taskbar-auto-hide-when-maximized)
 - [Taskbar Auto-Hide Speed/Frame Rate](https://windhawk.net/mods/taskbar-auto-hide-speed)
 - [Show All Tray Icons](https://windhawk.net/mods/taskbar-notification-icons-show-all)
@@ -129,34 +58,39 @@ Huge thanks to these awesome developers who made this mod possible -- your contr
 
 | Property | Name | Description | Accepted values |
 | --- | --- | --- | --- |
-| `TaskbarHeight` | Taskbar height | Set the height of the taskbar (Default is 74) | Non-negative integer |
-| `TaskbarIconSize` | Taskbar icon size | Set the width and height of taskbar icons (Default is 42) | Non-negative integer |
-| `TaskbarButtonSize` | Taskbar button size | Set the size (width and height) of taskbar buttons (Default is 74) | Non-negative integer |
-| `TaskbarOffsetY` | Taskbar vertical offset | Move the taskbar up or down. Padding of the same value is applied to the top (Default is 6) | Non-negative integer |
-| `TrayTaskGap` | Tray task gap | Adjust the space between the task area and the tray area (Default is 10) | Non-negative integer |
-| `TaskbarBackgroundHorizontalPadding` | Taskbar background horizontal padding | Set the horizontal padding on both sides of the taskbar background (Default is 2) | Non-negative integer |
-| `FullWidthTaskbarBackground` | Full-width taskbar background | When enabled, the taskbar background fills the entire width of the screen, similar to the default Windows behavior (Default is off) | Boolean (true/false) |
-| `IgnoreShowDesktopButton` | Ignore "Show Desktop" button | When enabled, the "Show Desktop" button is ignored in width calculations (Default is off) | Boolean (true/false) |
-| `TaskbarCornerRadius` | Taskbar corner radius | Controls how rounded the taskbar corners appear (Default is 22) | Non-negative integer |
-| `TaskButtonCornerRadius` | Task button corner radius | Controls how rounded the corners of individual task buttons are (Default is 16) | Non-negative integer |
-| `FlatTaskbarBottomCorners` | Flat bottom corners | When enabled, the bottom corners of the taskbar will be squared and the taskbar will dock to the screen edge. This overrides the taskbar offset; this is always on with the full-width taskbar background option (Default is off) | Boolean (true/false) |
-| `CustomizeTaskbarBackground` | Stylize the taskbar background | When enabled, the taskbar background will be changed to acrylic blur. Disable this option if you are using other mods that change the taskbar background. You may need to restart explorer.exe to restore the default taskbar background (Default is on) | Boolean (true/false) |
-| `TaskbarBackgroundOpacity` | Background opacity | Adjust the opacity of the taskbar background. 0 = fully transparent, 100 = fully opaque (Default is 100) | Non-negative integer |
-| `TaskbarBackgroundTint` | Background tint | Modify the taskbar tint level. Higher values = more tint. Range 0-100 (Default is 0) | Non-negative integer |
-| `TaskbarBackgroundLuminosity` | Background luminosity | Adjust luminosity of the taskbar background. Higher values = more opaque, lower values = more glass-like. Range 0-100 (Default is 30) | Non-negative integer |
-| `TaskbarBorderOpacity` | Border opacity | Set the opacity of the taskbar border, as well as the app dividers. Range 0-100 (Default is 20) | Non-negative integer |
-| `TaskbarBorderColorHex` | Border color (HEX) | Set the color of the taskbar border and app dividers, Hex color as `#RRGGBB` (Default is `#ffffff`) | string hex color |
-| `TaskbarBorderThickness` | Taskbar border thickness scale (%) | Set the scale of the taskbar border. Range 0-100 (Default is 8) | unsigned int percentage |
-| `AppsDividerThickness` | Apps divider thickness scale (%) | Set the thickness scale of the taskbar dividers. Range 0-100 (Default is 8) | unsigned int percentage |
-| `AppsDividerVerticalScale` | Apps divider vertical scale (%) | Set the vertical scale of the taskbar dividers. Range 0-100 (Default is 40) | unsigned int percentage |
+| `TaskbarHeight` | Taskbar height | Set the height of the taskbar. Default is 74 | Non-negative integer |
+| `TaskbarIconSize` | Taskbar icon size | Set the width and height of taskbar icons. Values below 8 are clamped to 8; values above the current taskbar/button size are clamped to fit. Default is 42 | Non-negative integer |
+| `TaskbarButtonSize` | Taskbar button size | Set the size (width and height) of taskbar buttons. Default is 72 | Non-negative integer |
+| `TaskbarOffsetY` | Taskbar vertical offset | Move the taskbar up or down. Padding of the same value is applied to the top. Default is 6 | Non-negative integer |
+| `TrayTaskGap` | Tray task gap | Adjust the space between the task area and the tray area. Default is 10 | Non-negative integer |
+| `TaskbarBackgroundHorizontalPadding` | Taskbar background horizontal padding | Set the horizontal padding on both sides of the taskbar background. Default is 2 | Non-negative integer |
+| `FullWidthTaskbarBackground` | Full-width taskbar background | When enabled, the taskbar background fills the entire width of the screen, similar to the default Windows behavior. Default is off | Boolean (true/false) |
+| `IgnoreShowDesktopButton` | Ignore "Show Desktop" button | When enabled, the "Show Desktop" button is ignored in width calculations. Default is off | Boolean (true/false) |
+| `TaskbarCornerRadius` | Taskbar corner radius | Controls how rounded the taskbar corners appear. Default is 22 | Non-negative integer |
+| `TaskButtonCornerRadius` | Task button corner radius | Controls how rounded the corners of individual task buttons are. Default is 18 | Non-negative integer |
+| `FlatTaskbarBottomCorners` | Flat bottom corners | When enabled, the bottom corners of the taskbar will be squared and the taskbar will dock to the screen edge. This overrides the taskbar offset; this is always on with the full-width taskbar background option. Default is off | Boolean (true/false) |
+| `CustomizeTaskbarBackground` | Stylize the taskbar background | When enabled, this mod applies its taskbar background visuals. When disabled, this mod skips all taskbar background changes so other Windhawk mods can provide their own background. Default is on | Boolean (true/false) |
+| `DisableCustomBlurBackground` | Disable custom blur background | When enabled, the WindhawkBlur brush is skipped and only the fallback color is used, producing a solid background. Background blur, tint, tint color, luminosity, saturation, and inversion settings are ignored. This also activates automatically when background tint is 100, background blur amount is 0, or background inversion is 100. Default is off | Boolean (true/false) |
+| `TaskbarBackgroundOpacity` | Background opacity | Adjust the opacity of the taskbar background. 0 = fully transparent, 100 = fully opaque. Default is 100 | Non-negative integer |
+| `TaskbarBackgroundTint` | Background tint | Modify the taskbar tint level. Higher values = more tint. Range 0-100. Default is 0 | Non-negative integer |
+| `TaskbarBackgroundLuminosity` | Background luminosity | Adjust luminosity of the taskbar background. Higher values = more opaque, lower values = more glass-like. Range 0-100. Default is 20 | Non-negative integer |
+| `TaskbarBackgroundBlurAmount` | Background blur amount | WindhawkBlur Gaussian blur amount. Higher values make the taskbar glass blur stronger. Must be non-negative. Default is 30 | Non-negative integer |
+| `TaskbarBackgroundTintColor` | Background tint color | WindhawkBlur tint color. Accepts `#RRGGBB`, `#AARRGGBB`, or {ThemeResource Name}. Default is {ThemeResource CardStrokeColorDefaultSolid}. Use {ThemeResource SystemBaseHighColor} if you want white color when Windows is in dark mode, or black in light mode. | Text |
+| `TaskbarBackgroundTintSaturation` | Background saturation | WindhawkBlur saturation applied before tint. 0 = grayscale, 100 = normal, 200-500 = boosted saturation. Must be non-negative. Default is 200. Max is 500 | Non-negative integer |
+| `TaskbarBackgroundInversion` | Background inversion | Inverts the blurred background behind the taskbar to enhance contrast. 0 = off, 100 = fully inverted. Default is 10 | Non-negative integer |
+| `TaskbarBackgroundFallbackColor` | Background fallback color | Color used when transparency effects or energy saver disable blur, or when the custom blur background is disabled. Accepts `#RRGGBB`, `#AARRGGBB`, or {ThemeResource Name}. Default is {ThemeResource CardStrokeColorDefaultSolid} | Text |
+| `TaskbarBorderOpacity` | Border opacity | Set the opacity of the taskbar border, as well as the app dividers. Range 0-100. Default is 10 | Non-negative integer |
+| `TaskbarBorderColorHex` | Border color (HEX) | Set the color of the taskbar border and app dividers, Hex color as `#RRGGBB`. Default is `#ffffff` | string hex color |
+| `TaskbarBorderThickness` | Taskbar border thickness scale (%) | Set the scale of the taskbar border. Range 0-100. Default is 8 | unsigned int percentage |
+| `AppsDividerThickness` | Apps divider thickness scale (%) | Set the thickness scale of the taskbar dividers. Range 0-100. Default is 8 | unsigned int percentage |
+| `AppsDividerVerticalScale` | Apps divider vertical scale (%) | Set the vertical scale of the taskbar dividers. Range 0-100. Default is 40 | unsigned int percentage |
 | `AppsDividerAlignment` | Choose the side on which the app dividers should appear |  |  |
 | `DividedAppNames` | App names for divider placement | Type partial app names where you'd like a divider to appear. Use ; to separate multiple entries (e.g., Steam; Notepad\+\+; Settings). Case-insensitive and supports regex. | string regex |
-| `TrayAreaDivider` | Tray area divider | When enabled, the tray area will be separated by a divider (Default is on) | Boolean (true/false) |
-| `StyleTrayArea` | Modify the tray area appearance | When enabled, the options for tray icon size will take effect (Default is off) | Boolean (true/false) |
-| `TrayIconSize` | Tray icon size | Set the width and height of tray icons. Minimum is 15. (Default is 15) | Non-negative integer |
-| `TrayButtonSize` | Tray button size | Set the size (width and height) of tray buttons. Minimum is 20. (Default is 30) | Non-negative integer |
-| `MoveFlyoutStartMenu` | Move Start Menu with Taskbar | When enabled, the Start and Search menus are moved to align with taskbar size and location (Default is on). | Boolean (true/false) |
-| `MoveFlyoutControlCenter` | Move Control Center with Taskbar | When enabled, the Control Center is moved to align with taskbar size and location (Default is on). | Boolean (true/false) |
-| `MoveFlyoutNotificationCenter` | Move Notification Center with Taskbar | When enabled, the Notification Center is moved to align with taskbar size and location (Default is on). | Boolean (true/false) |
-| `AlignFlyoutInner` | Align flyout windows to the inside of the taskbar | When enabled, the flyout windows will be aligned within the bounds of the taskbar. When off, they will be 50% inside the taskbar bounds (Default is on). | Boolean (true/false) |
-| `NotificationCenterPrimaryOnly` | Notification Center on primary monitor only | When enabled, the Notification Center (the clock/calendar popup) is only repositioned when opened on the primary monitor. On secondary monitors it appears at Windows' native default position. Only affects Notification Center — Start Menu, Search, and Control Center are unaffected. (Default is off) | Boolean (true/false) |
+| `TrayAreaDivider` | Tray area divider | When enabled, the tray area will be separated by a divider. Default is off | Boolean (true/false) |
+| `StyleTrayArea` | Modify the tray area appearance | When enabled, the options for tray icon size will take effect. Default is off | Boolean (true/false) |
+| `TrayIconSize` | Tray icon size | Set the width and height of tray icons. Minimum is 15. Default is 15 | Non-negative integer |
+| `TrayButtonSize` | Tray button size | Set the size (width and height) of tray buttons. Minimum is 20. Default is 30 | Non-negative integer |
+| `MoveFlyoutStartMenu` | Move Start Menu with Taskbar | When enabled, the Start and Search menus are moved to align with taskbar size and location. Default is on. | Boolean (true/false) |
+| `MoveFlyoutControlCenter` | Move Control Center with Taskbar | When enabled, the Control Center is moved to align with taskbar size and location. Default is on. | Boolean (true/false) |
+| `MoveFlyoutNotificationCenter` | Move Notification Center with Taskbar | When enabled, the Notification Center is moved to align with taskbar size and location. Default is on. | Boolean (true/false) |
+| `AlignFlyoutInner` | Align flyout windows to the inside of the taskbar | When enabled, the flyout windows will be aligned within the bounds of the taskbar. When off, they will be 50% inside the taskbar bounds. Default is on. | Boolean (true/false) |
