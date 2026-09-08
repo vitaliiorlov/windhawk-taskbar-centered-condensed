@@ -2,7 +2,7 @@
 // @id              taskbar-dock-like
 // @name            TAI (taskbar as island) for Windows 11
 // @description     Centers and floats the taskbar, moves the system tray next to the task area, and serves as an all-in-one, one-click mod to transform the taskbar into an animated dock.
-// @version         1.5.250
+// @version         1.5.251
 // @author          DarkionAvey
 // @github          https://github.com/DarkionAvey
 // @include         explorer.exe
@@ -390,6 +390,8 @@ bool GetUserDefinedNotificationCenterPrimaryOnly() {
   return g_settings.userDefinedNotificationCenterPrimaryOnly;
 }
 #include <cstdint>
+#include <cstdio>
+#include <cwchar>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -730,6 +732,51 @@ bool TryCalculateFlyoutYAboveTaskbar(const MONITORINFO& monitorInfo,
         y = monitorTop;
     }
     return true;
+}
+// ---------------------------------------------------------------------------
+// Fork addition: mirror flyout placement decisions to a file, so multi-monitor
+// and mixed-DPI issues can be diagnosed without DebugView attached. One line is
+// appended per flyout open to %TEMP%\windhawk_popup_log.txt. Failures are
+// silent by design -- diagnostics must never affect placement behaviour.
+void LogFlyoutPlacementToFileTai(PCWSTR stage,
+                                 PCWSTR monitorName,
+                                 int target,
+                                 UINT monitorDpiX,
+                                 UINT monitorDpiY,
+                                 UINT windowDpiX,
+                                 UINT windowDpiY,
+                                 int x,
+                                 int y,
+                                 int cx,
+                                 int cy,
+                                 float lastStartButtonXCalculated,
+                                 float lastRootWidth,
+                                 float lastTargetWidth) {
+  WCHAR logPath[MAX_PATH];
+  if (!GetEnvironmentVariableW(L"TEMP", logPath, MAX_PATH)) {
+    return;
+  }
+  if (wcscat_s(logPath, MAX_PATH, L"\\windhawk_popup_log.txt") != 0) {
+    return;
+  }
+  FILE* f = nullptr;
+  if (_wfopen_s(&f, logPath, L"a, ccs=UTF-8") != 0 || !f) {
+    return;
+  }
+  SYSTEMTIME st{};
+  GetLocalTime(&st);
+  POINT cursorPos{};
+  GetCursorPos(&cursorPos);
+  fwprintf(f,
+           L"%02d:%02d:%02d.%03d %s monitor=%s target=%d "
+           L"monitorDpi=%ux%u windowDpi=%ux%u "
+           L"setPos=(x=%d,y=%d,cx=%d,cy=%d) cursor=(%ld,%ld) "
+           L"tbState{startBtnX=%.2f rootW=%.2f targetW=%.2f}\n",
+           st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, stage,
+           monitorName, target, monitorDpiX, monitorDpiY, windowDpiX,
+           windowDpiY, x, y, cx, cy, cursorPos.x, cursorPos.y,
+           lastStartButtonXCalculated, lastRootWidth, lastTargetWidth);
+  fclose(f);
 }
 std::wstring GetMonitorName(HMONITOR monitor) {
     MONITORINFOEX monitorInfo = {};
@@ -4833,6 +4880,16 @@ if (target == DwmTarget::StartMenu) {
   }
 }
 Wh_Log(L"Recalc: monitor=%s taskbarState.lastLeftMostEdgeTray: %f, lastStartButtonXCalculated: %f g_lastRootWidth %f cx: %d, x:%d;cy: %d; y: %d; target:%d g_lastTargetWidth: %f, absStartX: %f; absRootWidth: %f; absTargetWidth: %f", monitorName.c_str(), taskbarState.lastLeftMostEdgeTray, taskbarState.lastStartButtonXCalculated, taskbarState.lastRootWidth, cx, x, cy, y, target, taskbarState.lastTargetWidth, absStartX, absRootWidth, absTargetWidth);
+// Fork addition: mirror the final placement to the windhawk_popup_log.txt
+// file under %TEMP% (see LogFlyoutPlacementToFileTai). No backslash in this
+// comment on purpose: this file is injected via replace_regex, and re.sub
+// treats backslash escapes in the replacement string.
+LogFlyoutPlacementToFileTai(L"Recalc", monitorName.c_str(), static_cast<int>(target),
+                            monitorDpiX, monitorDpiY, windowDpiX, windowDpiY,
+                            x, y, cx, cy,
+                            taskbarState.lastStartButtonXCalculated,
+                            taskbarState.lastRootWidth,
+                            taskbarState.lastTargetWidth);
 SetWindowPos(hwnd, nullptr, x, y, cx, cy, SWP_NOZORDER | SWP_NOACTIVATE);
     return original();
 }

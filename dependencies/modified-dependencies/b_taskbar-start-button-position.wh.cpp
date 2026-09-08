@@ -1439,6 +1439,16 @@ if (target == DwmTarget::StartMenu) {
   }
 }
 Wh_Log(L"Recalc: monitor=%s taskbarState.lastLeftMostEdgeTray: %f, lastStartButtonXCalculated: %f g_lastRootWidth %f cx: %d, x:%d;cy: %d; y: %d; target:%d g_lastTargetWidth: %f, absStartX: %f; absRootWidth: %f; absTargetWidth: %f", monitorName.c_str(), taskbarState.lastLeftMostEdgeTray, taskbarState.lastStartButtonXCalculated, taskbarState.lastRootWidth, cx, x, cy, y, target, taskbarState.lastTargetWidth, absStartX, absRootWidth, absTargetWidth);
+// Fork addition: mirror the final placement to the windhawk_popup_log.txt
+// file under %TEMP% (see LogFlyoutPlacementToFileTai). No backslash in this
+// comment on purpose: this file is injected via replace_regex, and re.sub
+// treats backslash escapes in the replacement string.
+LogFlyoutPlacementToFileTai(L"Recalc", monitorName.c_str(), static_cast<int>(target),
+                            monitorDpiX, monitorDpiY, windowDpiX, windowDpiY,
+                            x, y, cx, cy,
+                            taskbarState.lastStartButtonXCalculated,
+                            taskbarState.lastRootWidth,
+                            taskbarState.lastTargetWidth);
 SetWindowPos(hwnd, nullptr, x, y, cx, cy, SWP_NOZORDER | SWP_NOACTIVATE);
     return original();
 }
