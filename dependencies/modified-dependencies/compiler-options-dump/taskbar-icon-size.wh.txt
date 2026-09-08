@@ -1,1 +1,1 @@
- -lole32 -loleaut32 -lruntimeobject -lshcore -lversion
+-lole32 -loleaut32 -lruntimeobject -lshcore -lversion

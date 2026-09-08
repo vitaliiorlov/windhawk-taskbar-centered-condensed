@@ -88,13 +88,26 @@ class StartButtonPosition(URLProcessor):
             label="remove ExperienceToggleButton original pointer",
         )
         patch.remove_function("void WINAPI ExperienceToggleButton_UpdateButtonPadding_Hook(")
+        # ramensoftware removed AugmentedEntryPointButton_UpdateButtonPadding
+        # from taskbar-start-button-position.wh.cpp; only class-name string
+        # comparisons remain. Kept as optional so the build still succeeds now
+        # and still strips the symbol if upstream ever reintroduces it.
         patch.remove_regex(
             r"AugmentedEntryPointButton_UpdateButtonPadding_t[\s\w\d]*?AugmentedEntryPointButton_UpdateButtonPadding_Original;",
             label="remove AugmentedEntryPointButton original pointer",
+            required=False,
         )
         patch.remove_literal("std::atomic<bool> g_unloading;")
         patch.remove_literal("void ApplyStyle();")
-        patch.remove_typedef_enum("MONITOR_DPI_TYPE")
+        # ramensoftware no longer declares the MONITOR_DPI_TYPE typedef in this
+        # mod (it comes from the taskbar-icon-size module, which is concatenated
+        # first). remove_typedef_enum() has no `required` escape, so inline the
+        # equivalent removal as optional.
+        patch.remove_regex(
+            r"typedef\s+enum\s+MONITOR_DPI_TYPE\s*\{.*?\}\s*MONITOR_DPI_TYPE\s*;",
+            label="remove typedef enum: MONITOR_DPI_TYPE",
+            required=False,
+        )
 
     def _rename_and_disable_upstream_hooks(self, patch: CppPatcher) -> None:
         patch.replace_literal(
@@ -102,9 +115,11 @@ class StartButtonPosition(URLProcessor):
             "BOOL Wh_ModSettingsChangedStartButtonPosition()",
             count=1,
         )
+        # Optional for the same reason as the removal above.
         patch.replace_literal(
             "AugmentedEntryPointButton_UpdateButtonPadding_Hook",
             f"AugmentedEntryPointButton_UpdateButtonPadding_Hook_{self.name}",
+            required=False,
         )
         patch.replace_literal("HookTaskbarViewDllSymbols", f"HookTaskbarViewDllSymbols{self.name}")
         patch.replace_literal("LoadLibraryExW_Hook", f"LoadLibraryExW_Hook_{self.name}")
@@ -194,17 +209,26 @@ class StartButtonPosition(URLProcessor):
             count=1,
             label="resolve flyout monitor from taskbar invocation",
         )
-        patch.replace_literal(
-            "GetDpiForMonitor(monitor, MDT_DEFAULT, &monitorDpiX, &monitorDpiY);",
-            """if (!monitor ||
+        # ramensoftware removed the `UINT monitorDpiX = 96; ... GetDpiForMonitor(...)`
+        # block this patch used to replace, but the injected placement code still
+        # reads monitorDpiX/monitorDpiY -- without this the generated file does not
+        # compile ("undeclared identifier"). So declare them ourselves, right where
+        # upstream used to, keeping the original 96-DPI fallback semantics.
+        # MONITOR_DPI_TYPE / MDT_DEFAULT / GetDpiForMonitor all come from the
+        # taskbar-icon-size module, which is concatenated ahead of this one.
+        patch.insert_after_literal(
+            "HMONITOR monitor = ResolveFlyoutMonitorTai(hwnd);",
+            """
+    UINT monitorDpiX = 96;
+    UINT monitorDpiY = 96;
+    if (!monitor ||
         FAILED(GetDpiForMonitor(monitor, MDT_DEFAULT, &monitorDpiX,
                                 &monitorDpiY)) ||
         monitorDpiX == 0 || monitorDpiY == 0) {
         monitorDpiX = 96;
         monitorDpiY = 96;
     }""",
-            count=1,
-            label="validate target monitor dpi",
+            label="declare and validate target monitor dpi",
         )
         patch.insert_after_literal(
             "enum class DwmTarget {",
