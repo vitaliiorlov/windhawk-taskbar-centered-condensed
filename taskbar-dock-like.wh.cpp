@@ -2,7 +2,7 @@
 // @id              taskbar-dock-like
 // @name            TAI (taskbar as island) for Windows 11 - vo fork
 // @description     Centers and floats the taskbar, moves the system tray next to the task area, and serves as an all-in-one, one-click mod to transform the taskbar into an animated dock. Fork additions: the clickable taskbar area is clipped to the visible island, and the Notification Center can be limited to the primary monitor.
-// @version         1.5.252-vo
+// @version         1.5.253-vo
 // @author          vitaliiorlov (fork of DarkionAvey)
 // @github          https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed
 // @include         explorer.exe
@@ -18,18 +18,68 @@
 // https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed
 // ==WindhawkModReadme==
 /*
-![Screenshot](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/raw/main/screenshot.gif)
+![Screenshot](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed/raw/main/screenshot.png)
 # TAI (Taskbar as (an) island) for Windows 11
 TAI lets you transform your Windows 11 taskbar into a smooth floating dock without losing any of the original taskbar functionality!
 # Bug reports
-Please file bug reports here: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issues
+This is a fork. File issues with **this fork** here: https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed/issues
+For problems that also reproduce on upstream TAI, please report them upstream
+instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issues
+---
+> ## 🍴 This is a personal fork
+>
+> Upstream: [DarkionAvey/windhawk-taskbar-centered-condensed](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed).
+> This fork ([vitaliiorlov/windhawk-taskbar-centered-condensed](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed))
+> tracks upstream closely and adds three things on top.
+>
+> ### What's different from upstream
+>
+> 1. **The clickable taskbar area matches the visible island.**
+>    Upstream condenses the taskbar visually, but `Shell_TrayWnd` itself stays
+>    full monitor width, so right-clicks (and the "Task Manager / Taskbar
+>    settings" menu) land on the empty strips either side. This fork uses
+>    `SetWindowRgn` so the OS only routes mouse input to pixels inside the
+>    island. The clip is driven by the post-scale island bounds, so it tracks
+>    the island when upstream shrinks it on overflow. Also proposed upstream as
+>    [PR #19](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/pull/19).
+>
+> 2. **`NotificationCenterPrimaryOnly` setting.**
+>    Limits Notification Center repositioning to the primary monitor; on
+>    secondary monitors Windows' native placement is used instead. Upstream has
+>    an on/off toggle for the Notification Center but nothing that scopes it by
+>    monitor.
+>
+> 3. **Flyout placement is mirrored to a log file.**
+>    One line per flyout open, appended to `windhawk_popup_log.txt` under
+>    `%TEMP%`, so multi-monitor and mixed-DPI placement can be diagnosed
+>    without attaching DebugView.
+>
+> Everything else — the island auto-scaling, the WindhawkBlur engine, flyout
+> monitor resolution, the Y-above-taskbar clamp and Notification-Center
+> detection — is upstream's code, used as-is. Earlier versions of this fork
+> carried their own popup-placement hook; it was dropped in favour of
+> upstream's, which handles the same cases more robustly.
+>
+> ### Building
+>
+> ```powershell
+> python assemble-mod.py
+> ```
+>
+> Requires `requests` and `art`. The pipeline fetches the latest
+> `taskbar-icon-size` and `taskbar-start-button-position` from ramensoftware on
+> every run and re-applies the patches, so a build can start failing when those
+> upstream sources change. That is deliberate: `dependencies/cpp_patcher.py`
+> raises rather than silently emitting a broken mod. Fork changes belong in
+> `mod-parts/`, `dependencies/patches/`, or the processors — never in
+> `dependencies/modified-dependencies/`, which is regenerated output.
 ---
 ## 🚀 How to Install (Development Build)
 ⚠️ **Note:** Please disable any mods that affect taskbar height or taskbar icons—this mod already includes those
 features.
 1. [Install Windhawk](https://windhawk.net/) if you haven't already.
 2. Copy the contents of [
-   `assembled-mod.cpp`](https://raw.githubusercontent.com/DarkionAvey/windhawk-taskbar-centered-condensed/main/assembled-mod.cpp)
+   `assembled-mod.cpp`](https://raw.githubusercontent.com/vitaliiorlov/windhawk-taskbar-centered-condensed/main/assembled-mod.cpp)
    to your clipboard.
 3. Open **WindHawk** and navigate to: `Explore` → `Create a new mod`.
 4. Press `Ctrl+A` to select all, then `Ctrl+V` to paste.
@@ -38,7 +88,7 @@ features.
 ---
 ## 🛠 Source Code
 The actual mod code is split into files under [
-`mod-parts/`](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/blob/main/mod-parts/), which are later merged together using a Python script.
+`mod-parts/`](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed/blob/main/mod-parts/), which are later merged together using a Python script.
 ❗ **Do not edit `assembled-mod.cpp` manually**, as any changes will be overwritten in the next build cycle. Instead,
 modify the source files in the `mod-parts` directory.
 ---
