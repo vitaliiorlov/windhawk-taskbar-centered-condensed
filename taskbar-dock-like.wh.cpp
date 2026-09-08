@@ -1,10 +1,10 @@
 // ==WindhawkMod==
 // @id              taskbar-dock-like
-// @name            TAI (taskbar as island) for Windows 11
-// @description     Centers and floats the taskbar, moves the system tray next to the task area, and serves as an all-in-one, one-click mod to transform the taskbar into an animated dock.
-// @version         1.5.251
-// @author          DarkionAvey
-// @github          https://github.com/DarkionAvey
+// @name            TAI (taskbar as island) for Windows 11 - vo fork
+// @description     Centers and floats the taskbar, moves the system tray next to the task area, and serves as an all-in-one, one-click mod to transform the taskbar into an animated dock. Fork additions: the clickable taskbar area is clipped to the visible island, and the Notification Center can be limited to the primary monitor.
+// @version         1.5.252-vo
+// @author          vitaliiorlov (fork of DarkionAvey)
+// @github          https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed
 // @include         explorer.exe
 // @include         StartMenuExperienceHost.exe
 // @include         ShellHost.exe
@@ -13,8 +13,9 @@
 // @architecture    x86-64
 // ==/WindhawkMod==
 // This mod is based on code released under the GNU General Public License v3.0.
-// For bug reports and feedback:
-// https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed
+// Fork of https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed
+// For bug reports and feedback about this fork:
+// https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed
 // ==WindhawkModReadme==
 /*
 ![Screenshot](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/raw/main/screenshot.gif)

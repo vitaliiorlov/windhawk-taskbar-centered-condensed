@@ -116,6 +116,9 @@ def get_compiler_options_string(base_dir: Path):
     return compiler_options
 
 
+FORK_VERSION_SUFFIX = "-vo"
+
+
 def main(major_minor="1.0"):
     base_dir = Path(os.path.dirname(os.path.abspath(__file__)))
     version_file_path = os.path.join(base_dir, 'mod-parts', 'mod-build-version.txt')
@@ -136,6 +139,11 @@ def main(major_minor="1.0"):
 
     with open(version_file_path, 'w') as f:
         f.write(version)
+
+    # Fork marker on the displayed version only. mod-build-version.txt keeps the
+    # bare major.minor.patch because get_next_patch_version() parses it back, so
+    # the upstream base this fork is built on stays readable at a glance.
+    display_version = f"{version}{FORK_VERSION_SUFFIX}"
 
     readme_path = os.path.join(base_dir, 'README.md')
     dependencies_dir_path = os.path.join(base_dir, 'dependencies', 'modified-dependencies')
@@ -158,7 +166,7 @@ def main(major_minor="1.0"):
     header_contents = header_contents.replace('{read_me_contents}', new_readme_for_header.strip())
     header_contents = header_contents.replace('{mod_settings}', re.sub(r'^\s*\$type:.*$', '', mod_settings_contents,
                                                                        flags=re.MULTILINE).strip())
-    header_contents = header_contents.replace('{version_code}', version)
+    header_contents = header_contents.replace('{version_code}', display_version)
 
     merged_contents = header_contents + "\n\n"
     for cpp_file_path in glob.glob(os.path.join(dependencies_dir_path, '*.cpp')):
