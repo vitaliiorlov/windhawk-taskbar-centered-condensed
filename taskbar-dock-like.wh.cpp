@@ -2,7 +2,7 @@
 // @id              taskbar-dock-like
 // @name            TAI (taskbar as island) for Windows 11
 // @description     Centers and floats the taskbar, moves the system tray next to the task area, and serves as an all-in-one, one-click mod to transform the taskbar into an animated dock.
-// @version         1.5.249
+// @version         1.5.250
 // @author          DarkionAvey
 // @github          https://github.com/DarkionAvey
 // @include         explorer.exe
@@ -92,6 +92,7 @@ Huge thanks to these awesome developers who made this mod possible -- your contr
 | `MoveFlyoutControlCenter` | Move Control Center with Taskbar | When enabled, the Control Center is moved to align with taskbar size and location. Default is on. | Boolean (true/false) |
 | `MoveFlyoutNotificationCenter` | Move Notification Center with Taskbar | When enabled, the Notification Center is moved to align with taskbar size and location. Default is on. | Boolean (true/false) |
 | `AlignFlyoutInner` | Align flyout windows to the inside of the taskbar | When enabled, the flyout windows will be aligned within the bounds of the taskbar. When off, they will be 50% inside the taskbar bounds. Default is on. | Boolean (true/false) |
+| `NotificationCenterPrimaryOnly` | Notification Center on primary monitor only | When enabled, the Notification Center (the clock/calendar popup) is only repositioned when opened on the primary monitor. On secondary monitors it appears at Windows' native default position. Only affects the Notification Center - Start Menu, Search and Control Center are unaffected. Default is off. | Boolean (true/false) |
 */
 // ==/WindhawkModReadme==
 // ==WindhawkModSettings==
@@ -206,6 +207,9 @@ Huge thanks to these awesome developers who made this mod possible -- your contr
 - AlignFlyoutInner: true
   $name: Align flyout windows to the inside of the taskbar
   $description: When enabled, the flyout windows will be aligned within the bounds of the taskbar. When off, they will be 50% inside the taskbar bounds. Default is on.
+- NotificationCenterPrimaryOnly: false
+  $name: Notification Center on primary monitor only
+  $description: When enabled, the Notification Center (the clock/calendar popup) is only repositioned when opened on the primary monitor. On secondary monitors it appears at Windows' native default position. Only affects the Notification Center - Start Menu, Search and Control Center are unaffected. Default is off.
 */
 // ==/WindhawkModSettings==
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -365,6 +369,7 @@ struct ModSettings {
   unsigned int borderColorR, borderColorG, borderColorB;
   std::vector<std::wregex> compiledDividedAppPatterns;
   bool userDefinedAlignFlyoutInner;
+  bool userDefinedNotificationCenterPrimaryOnly;
   bool userDefinedCustomizeTaskbarBackground;
   bool userDefinedDisableCustomBlurBackground;
   double userDefinedAppsDividerThickness;
@@ -376,6 +381,13 @@ std::recursive_mutex g_settingsMutex;
 bool GetUserDefinedAlignFlyoutInner() {
   std::lock_guard<std::recursive_mutex> lock(g_settingsMutex);
   return g_settings.userDefinedAlignFlyoutInner;
+}
+// Fork addition. Read from the DwmSetWindowAttribute flyout hook, which runs on
+// another thread and must take g_settingsMutex rather than touching g_settings
+// directly.
+bool GetUserDefinedNotificationCenterPrimaryOnly() {
+  std::lock_guard<std::recursive_mutex> lock(g_settingsMutex);
+  return g_settings.userDefinedNotificationCenterPrimaryOnly;
 }
 #include <cstdint>
 #include <memory>
@@ -4804,6 +4816,14 @@ if (target == DwmTarget::StartMenu) {
   if (y != 0) {
     return original();
   }
+  // Fork addition: NotificationCenterPrimaryOnly. Bail out entirely on
+  // non-primary monitors so Windows keeps its native placement there. This has
+  // to be an early return -- folding it into the condition below would fall
+  // into the else branch, which right-aligns to the taskbar root width.
+  if (GetUserDefinedNotificationCenterPrimaryOnly() &&
+      monitor != MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY)) {
+    return original();
+  }
   if (g_settings_startbuttonposition.MoveFlyoutNotificationCenter && !g_unloading) {
     int localX = static_cast<int>(lastRecordedTrayRightMostEdgeForMonitor * dpiScale - (alignFlyoutInner ? (cx - flyoutInnerPaddingPx) : (cx / 2.0f)));
     localX = std::max(0, std::min(localX, static_cast<int>(absRootWidth - cx)));
@@ -8513,6 +8533,7 @@ void UpdateGlobalSettings() {
   g_settings.userDefinedTrayAreaDivider = (getInt(L"TrayAreaDivider") != 0) && !g_unloading;
   g_settings.userDefinedStyleTrayArea = (getInt(L"StyleTrayArea") != 0);
   g_settings.userDefinedAlignFlyoutInner = (getInt(L"AlignFlyoutInner") != 0);
+  g_settings.userDefinedNotificationCenterPrimaryOnly = (getInt(L"NotificationCenterPrimaryOnly") != 0);
   g_settings.userDefinedCustomizeTaskbarBackground = (getInt(L"CustomizeTaskbarBackground") != 0);
   g_settings.userDefinedDisableCustomBlurBackground = (getInt(L"DisableCustomBlurBackground") != 0);
   PCWSTR appsDividerAlignment = Wh_GetStringSetting(L"AppsDividerAlignment");

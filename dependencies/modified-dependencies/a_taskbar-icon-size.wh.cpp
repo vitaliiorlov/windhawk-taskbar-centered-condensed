@@ -155,6 +155,7 @@ struct ModSettings {
   unsigned int borderColorR, borderColorG, borderColorB;
   std::vector<std::wregex> compiledDividedAppPatterns;
   bool userDefinedAlignFlyoutInner;
+  bool userDefinedNotificationCenterPrimaryOnly;
   bool userDefinedCustomizeTaskbarBackground;
   bool userDefinedDisableCustomBlurBackground;
   double userDefinedAppsDividerThickness;
@@ -166,6 +167,13 @@ std::recursive_mutex g_settingsMutex;
 bool GetUserDefinedAlignFlyoutInner() {
   std::lock_guard<std::recursive_mutex> lock(g_settingsMutex);
   return g_settings.userDefinedAlignFlyoutInner;
+}
+// Fork addition. Read from the DwmSetWindowAttribute flyout hook, which runs on
+// another thread and must take g_settingsMutex rather than touching g_settings
+// directly.
+bool GetUserDefinedNotificationCenterPrimaryOnly() {
+  std::lock_guard<std::recursive_mutex> lock(g_settingsMutex);
+  return g_settings.userDefinedNotificationCenterPrimaryOnly;
 }
 #include <cstdint>
 #include <memory>

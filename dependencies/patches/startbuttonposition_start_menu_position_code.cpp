@@ -76,6 +76,14 @@ if (target == DwmTarget::StartMenu) {
   if (y != 0) {
     return original();
   }
+  // Fork addition: NotificationCenterPrimaryOnly. Bail out entirely on
+  // non-primary monitors so Windows keeps its native placement there. This has
+  // to be an early return -- folding it into the condition below would fall
+  // into the else branch, which right-aligns to the taskbar root width.
+  if (GetUserDefinedNotificationCenterPrimaryOnly() &&
+      monitor != MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY)) {
+    return original();
+  }
   if (g_settings_startbuttonposition.MoveFlyoutNotificationCenter && !g_unloading) {
     int localX = static_cast<int>(lastRecordedTrayRightMostEdgeForMonitor * dpiScale - (alignFlyoutInner ? (cx - flyoutInnerPaddingPx) : (cx / 2.0f)));
     localX = std::max(0, std::min(localX, static_cast<int>(absRootWidth - cx)));
