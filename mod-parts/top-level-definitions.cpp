@@ -24,6 +24,14 @@ struct TaskbarState {
   float lastTargetOffsetY{0};
   float initOffsetX{-1};
   bool wasOverflowing{false};
+  // Fork addition: cached SetWindowRgn inputs (monitor-relative DIPs, already
+  // post island-scale) so SetWindowRgn is only called when the visible bounds
+  // actually change. lastRegionClear=true means the window currently has no
+  // region set, i.e. the full width is clickable.
+  float lastRegionX{-1.0f};
+  float lastRegionW{-1.0f};
+  float lastRegionCorner{-1.0f};
+  bool lastRegionClear{true};
   uintptr_t lastOverflowButtonIdentity{0};
   bool overflowButtonSuppressionKnown{false};
   bool overflowButtonSuppressed{false};

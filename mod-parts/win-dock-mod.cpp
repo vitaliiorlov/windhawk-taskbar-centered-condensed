@@ -3131,6 +3131,113 @@ void LogAllSettings() {
   Wh_Log(L"setting %d %s", g_settings.userDefinedCustomizeTaskbarBackground ? 1 : 0, L"userDefinedCustomizeTaskbarBackground");
   Wh_Log(L"setting %d %s", g_settings.userDefinedDisableCustomBlurBackground ? 1 : 0, L"userDefinedDisableCustomBlurBackground");
 }
+// ---------------------------------------------------------------------------
+// Fork addition: clip the taskbar window's clickable region to the visible
+// island.
+//
+// The mod condenses the taskbar visually, but Shell_TrayWnd itself stays full
+// monitor width, so right-clicks (and the "Task Manager / Taskbar settings"
+// menu) land on the empty strips either side of the island. SetWindowRgn makes
+// the OS route mouse input only to pixels inside the island; SetWindowRgn(NULL)
+// restores the full-width clickable area.
+//
+// Inputs are monitor-relative DIPs and must already be POST island-scale: the
+// island is shrunk with a composition Visual.Scale when it would overflow, so
+// feeding pre-scale geometry here would clip a region wider than what is
+// actually drawn. Only the X axis is clipped -- the full window height stays
+// clickable so the auto-hide reveal zone is unaffected.
+struct UpdateTaskbarRegionContext {
+  const std::wstring* monitorName;
+  float visibleXDip;
+  float visibleWidthDip;
+  float cornerRadiusDip;
+  float rasterizationScale;
+  bool clear;
+};
+
+void UpdateTaskbarWindowRegion(std::wstring const& monitorName,
+                               float visibleXDip,
+                               float visibleWidthDip,
+                               float cornerRadiusDip,
+                               float rasterizationScale,
+                               bool clear) {
+  UpdateTaskbarRegionContext ctx{&monitorName,       visibleXDip,
+                                 visibleWidthDip,    cornerRadiusDip,
+                                 rasterizationScale, clear};
+  EnumWindows(
+      [](HWND hWnd, LPARAM lParam) -> BOOL {
+        auto* ctx = reinterpret_cast<UpdateTaskbarRegionContext*>(lParam);
+        DWORD pid = 0;
+        if (!GetWindowThreadProcessId(hWnd, &pid) ||
+            pid != GetCurrentProcessId()) {
+          return TRUE;
+        }
+        if (!IsTaskbarWindowClassTai(hWnd)) {
+          return TRUE;
+        }
+        HMONITOR mon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+        if (GetMonitorName(mon) != *ctx->monitorName) {
+          return TRUE;
+        }
+        if (ctx->clear) {
+          SetWindowRgn(hWnd, nullptr, TRUE);
+          return FALSE;
+        }
+        RECT wnd{};
+        if (!GetWindowRect(hWnd, &wnd)) {
+          return FALSE;
+        }
+        const int wndW = wnd.right - wnd.left;
+        const int wndH = wnd.bottom - wnd.top;
+        if (wndW <= 0 || wndH <= 0) {
+          return FALSE;
+        }
+        const float scale =
+            ctx->rasterizationScale > 0.0f ? ctx->rasterizationScale : 1.0f;
+        int x1 = static_cast<int>(std::lround(ctx->visibleXDip * scale));
+        int x2 = static_cast<int>(
+            std::lround((ctx->visibleXDip + ctx->visibleWidthDip) * scale));
+        if (x1 < 0) x1 = 0;
+        if (x2 > wndW) x2 = wndW;
+        if (x2 - x1 < 10) {
+          // Too small to be useful; fall back to the full window rather than
+          // risk making the taskbar unclickable.
+          SetWindowRgn(hWnd, nullptr, TRUE);
+          return FALSE;
+        }
+        int cr = static_cast<int>(std::lround(ctx->cornerRadiusDip * scale));
+        if (cr < 0) cr = 0;
+        if (cr * 2 > x2 - x1) cr = (x2 - x1) / 2;
+        if (cr * 2 > wndH) cr = wndH / 2;
+        HRGN hRgn = (cr > 0) ? CreateRoundRectRgn(x1, 0, x2 + 1, wndH + 1,
+                                                  cr * 2, cr * 2)
+                             : CreateRectRgn(x1, 0, x2, wndH);
+        // SetWindowRgn takes ownership of hRgn; do not DeleteObject after.
+        SetWindowRgn(hWnd, hRgn, TRUE);
+        return FALSE;
+      },
+      reinterpret_cast<LPARAM>(&ctx));
+}
+
+// Clear the region on every taskbar window in this process, regardless of
+// monitor. Used on unload so a clipped taskbar is never left behind if the
+// final ApplyStyle pass does not reach the region update.
+void ClearAllTaskbarWindowRegionsTai() {
+  EnumWindows(
+      [](HWND hWnd, LPARAM) -> BOOL {
+        DWORD pid = 0;
+        if (!GetWindowThreadProcessId(hWnd, &pid) ||
+            pid != GetCurrentProcessId()) {
+          return TRUE;
+        }
+        if (IsTaskbarWindowClassTai(hWnd)) {
+          SetWindowRgn(hWnd, nullptr, TRUE);
+        }
+        return TRUE;
+      },
+      0);
+}
+
 bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorName) {
   if (!xamlRootContent) {
     Wh_Log(L"xamlRootContent is null");
@@ -3607,6 +3714,35 @@ bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorNam
       static_cast<double>(rasterizationScale),
       static_cast<double>(scaledBackgroundLeftScreen),
       static_cast<double>(scaledBackgroundRightScreen));
+  // Fork addition: keep the taskbar's clickable region matched to the visible
+  // island. Uses the POST-scale bounds computed above so the clip tracks the
+  // island when it is shrunk on overflow, and the anchored (not centered) left
+  // edge. Placed before the "nothing changed" early-out below so it still runs
+  // on cheap passes; the cached inputs keep it a no-op when nothing moved.
+  {
+    const bool clearRegion =
+        g_unloading || g_settings.userDefinedFullWidthTaskbarBackground;
+    const float regionX = clearRegion ? 0.0f : scaledBackgroundLeftScreen;
+    const float regionW =
+        clearRegion
+            ? static_cast<float>(rootWidth)
+            : (scaledBackgroundRightScreen - scaledBackgroundLeftScreen);
+    const float regionCorner =
+        clearRegion ? 0.0f
+                    : (g_settings.userDefinedTaskbarCornerRadius *
+                       targetTaskbarIslandScale);
+    if (state.lastRegionClear != clearRegion ||
+        std::abs(state.lastRegionX - regionX) > 0.5f ||
+        std::abs(state.lastRegionW - regionW) > 0.5f ||
+        std::abs(state.lastRegionCorner - regionCorner) > 0.5f) {
+      state.lastRegionClear = clearRegion;
+      state.lastRegionX = regionX;
+      state.lastRegionW = regionW;
+      state.lastRegionCorner = regionCorner;
+      UpdateTaskbarWindowRegion(monitorName, regionX, regionW, regionCorner,
+                                rasterizationScale, clearRegion);
+    }
+  }
   if (!forceStyleApply && !invalidateDimensionsThisPass && !g_unloading &&
       std::abs(targetOffsetXTray - systemTrayFrameGridVisual.Offset().x) <= visualOffsetTolerance &&
       childrenWidthTaskbar == state.lastChildrenWidthTaskbar &&
@@ -4338,6 +4474,10 @@ void Wh_ModUninit() {
   if (g_PartialMode) {
     return;
   }
+  // Fork addition: belt-and-braces. Do not rely on a final g_unloading
+  // ApplyStyle pass reaching the region update -- it has several earlier
+  // return paths.
+  ClearAllTaskbarWindowRegionsTai();
   UninitMinimizeAnimationCorrectionTai();
   CleanupDebounce();
   Wh_ModUninitTBIconSize();
