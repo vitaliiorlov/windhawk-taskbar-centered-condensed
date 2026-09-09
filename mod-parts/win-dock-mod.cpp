@@ -3508,6 +3508,30 @@ bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorNam
   if (trayHorizontalAlignmentRef && trayHorizontalAlignmentRef.Value() == HorizontalAlignment::Center) {
     trayFrame.SetValue(FrameworkElement::HorizontalAlignmentProperty(), winrt::box_value(HorizontalAlignment::Right));
   }
+  // Fork addition. TaskbarFrame and SystemTrayFrame are siblings in the same
+  // XAML root grid, and TaskbarOffsetY makes that root 2*TaskbarOffsetY taller
+  // than the island, which is drawn inset by TaskbarOffsetY within it. taskFrame
+  // is given the full root height below, but trayFrame keeps the bare island
+  // height, so where the tray lands is decided entirely by its vertical
+  // alignment. Nothing ever set one: this relied on XAML implicitly centering an
+  // explicitly sized child, and Windows 11 25H2 stopped resolving it that way,
+  // leaving the clock, battery, volume and language indicator off by exactly
+  // TaskbarOffsetY (upstream issues #26 and #30). Pin it here rather than beside
+  // the height writes below, because those only run when dimensions are
+  // invalidated while SystemTrayFrame_Height_Hook rewrites the tray frame on
+  // every SystemTrayController::UpdateFrameSize; asserting it on every pass is
+  // what stops the misalignment from returning after an Explorer restart.
+  if (g_unloading) {
+    trayFrame.ClearValue(FrameworkElement::VerticalAlignmentProperty());
+  } else {
+    auto trayVerticalAlignmentRef = trayFrame
+        .GetValue(FrameworkElement::VerticalAlignmentProperty())
+        .try_as<winrt::Windows::Foundation::IReference<VerticalAlignment>>();
+    if (!trayVerticalAlignmentRef ||
+        trayVerticalAlignmentRef.Value() != VerticalAlignment::Center) {
+      trayFrame.SetValue(FrameworkElement::VerticalAlignmentProperty(), winrt::box_value(VerticalAlignment::Center));
+    }
+  }
   int childrenCountTray = 0;
   auto trayChildrenMeasurement =
       MeasureValidChildren(systemTrayFrameGrid);
