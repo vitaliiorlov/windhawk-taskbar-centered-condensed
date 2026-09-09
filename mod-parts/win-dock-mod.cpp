@@ -2823,13 +2823,23 @@ void LogElementGeometry(PCWSTR tag,
          automationId.c_str(),
          parentClass.c_str(),
          parentName.c_str());
-  Wh_Log(L"    size Actual=%8.2fx%-8.2f W=%8.2f H=%8.2f MinW=%8.2f MaxW=%8.2f Margin=(%.2f,%.2f,%.2f,%.2f)",
+  // VA/HA use the Windows.UI.Xaml enum ordering: Top/Left=0, Center=1,
+  // Bottom/Right=2, Stretch=3.
+  int verticalAlignmentValue = -1;
+  int horizontalAlignmentValue = -1;
+  try { verticalAlignmentValue = static_cast<int>(element.VerticalAlignment()); } catch (...) {}
+  try { horizontalAlignmentValue = static_cast<int>(element.HorizontalAlignment()); } catch (...) {}
+  Wh_Log(L"    size Actual=%8.2fx%-8.2f W=%8.2f H=%8.2f MinW=%8.2f MaxW=%8.2f MinH=%8.2f MaxH=%8.2f VA=%d HA=%d Margin=(%.2f,%.2f,%.2f,%.2f)",
          element.ActualWidth(),
          element.ActualHeight(),
          element.Width(),
          element.Height(),
          element.MinWidth(),
          element.MaxWidth(),
+         element.MinHeight(),
+         element.MaxHeight(),
+         verticalAlignmentValue,
+         horizontalAlignmentValue,
          margin.Left,
          margin.Top,
          margin.Right,
@@ -2874,10 +2884,14 @@ void LogAncestorGeometryChain(PCWSTR tag,
 
     winrt::Windows::Foundation::Rect rect{};
     const bool okRoot = rootGridTaskBar && TryGetDebugBoundsRelativeTo(element, rootGridTaskBar, rect);
-    Wh_Log(L"    #%d class=%s name=%s Actual=%6.2fx%-6.2f ActualOffset=(%.2f,%.2f,%.2f) VisualOffset=(%.2f,%.2f,%.2f) Margin=(%.2f,%.2f,%.2f,%.2f) rootRect=%s X=%.2f Y=%.2f W=%.2f H=%.2f",
+    int verticalAlignmentValue = -1;
+    try { verticalAlignmentValue = static_cast<int>(element.VerticalAlignment()); } catch (...) {}
+
+    Wh_Log(L"    #%d class=%s name=%s VA=%d Actual=%6.2fx%-6.2f ActualOffset=(%.2f,%.2f,%.2f) VisualOffset=(%.2f,%.2f,%.2f) Margin=(%.2f,%.2f,%.2f,%.2f) rootRect=%s X=%.2f Y=%.2f W=%.2f H=%.2f",
            depth,
            className.c_str(),
            name.c_str(),
+           verticalAlignmentValue,
            element.ActualWidth(),
            element.ActualHeight(),
            actualOffset.x,
@@ -2972,6 +2986,10 @@ void LogTaskbarGeometryProbe(PCWSTR reason,
   LogElementGeometry(L"backgroundFill", backgroundFillChild, rootGridTaskBar, taskbarFrameRepeater, taskFrame);
   LogAncestorGeometryChain(L"startButton", startButton, rootGridTaskBar);
   LogAncestorGeometryChain(L"repeater", taskbarFrameRepeater, rootGridTaskBar);
+  // Fork addition: SystemTrayFrameGrid -> SystemTrayFrame -> XAML root is the
+  // chain that decides the tray's vertical placement, so log it alongside the
+  // task-area chains.
+  LogAncestorGeometryChain(L"trayGrid", systemTrayFrameGrid, rootGridTaskBar);
   Wh_Log(L"[TBGEOM] ===== end =====");
 }
 void UpdateGlobalSettings() {
@@ -3508,6 +3526,30 @@ bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorNam
   if (trayHorizontalAlignmentRef && trayHorizontalAlignmentRef.Value() == HorizontalAlignment::Center) {
     trayFrame.SetValue(FrameworkElement::HorizontalAlignmentProperty(), winrt::box_value(HorizontalAlignment::Right));
   }
+  // Fork addition. TaskbarFrame and SystemTrayFrame are siblings in the same
+  // XAML root grid, and TaskbarOffsetY makes that root 2*TaskbarOffsetY taller
+  // than the island, which is drawn inset by TaskbarOffsetY within it. taskFrame
+  // is given the full root height below, but trayFrame keeps the bare island
+  // height, so where the tray lands is decided entirely by its vertical
+  // alignment. Nothing ever set one: this relied on XAML implicitly centering an
+  // explicitly sized child, and Windows 11 25H2 stopped resolving it that way,
+  // leaving the clock, battery, volume and language indicator off by exactly
+  // TaskbarOffsetY (upstream issues #26 and #30). Pin it here rather than beside
+  // the height writes below, because those only run when dimensions are
+  // invalidated while SystemTrayFrame_Height_Hook rewrites the tray frame on
+  // every SystemTrayController::UpdateFrameSize; asserting it on every pass is
+  // what stops the misalignment from returning after an Explorer restart.
+  if (g_unloading) {
+    trayFrame.ClearValue(FrameworkElement::VerticalAlignmentProperty());
+  } else {
+    auto trayVerticalAlignmentRef = trayFrame
+        .GetValue(FrameworkElement::VerticalAlignmentProperty())
+        .try_as<winrt::Windows::Foundation::IReference<VerticalAlignment>>();
+    if (!trayVerticalAlignmentRef ||
+        trayVerticalAlignmentRef.Value() != VerticalAlignment::Center) {
+      trayFrame.SetValue(FrameworkElement::VerticalAlignmentProperty(), winrt::box_value(VerticalAlignment::Center));
+    }
+  }
   int childrenCountTray = 0;
   auto trayChildrenMeasurement =
       MeasureValidChildren(systemTrayFrameGrid);
@@ -3765,7 +3807,7 @@ bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorNam
     state.lastTrayFrameWidth = static_cast<unsigned int>(trayFrameWidth);
   }
   signed int userDefinedTaskbarOffsetY = (g_settings.userDefinedFlatTaskbarBottomCorners || g_settings.userDefinedFullWidthTaskbarBackground) ? 0 : g_settings.userDefinedTaskbarOffsetY;
-  if (ShouldLogTaskbarGeometry(isOverflowing || taskbarLayoutIsEdgeClamped || taskbarLayoutIsTrayConstrained || useStableStartButtonAnchor || targetTaskbarIslandScale < 0.999f || forceStyleApply)) {
+  if (ShouldLogTaskbarGeometry(isOverflowing || taskbarLayoutIsEdgeClamped || taskbarLayoutIsTrayConstrained || useStableStartButtonAnchor || targetTaskbarIslandScale < 0.999f || forceStyleApply || invalidateDimensionsThisPass)) {
     Wh_Log(L"[TBGEOM] virtualSurface=%d virtualWidth=%.2f actualRepeaterWidth=%.2f layoutSurfaceWidth=%.2f overflowSuppressed=%d",
            useVirtualTaskbarSurface ? 1 : 0,
            taskbarVirtualSurfaceWidth,
