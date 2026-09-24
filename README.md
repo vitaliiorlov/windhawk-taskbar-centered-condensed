@@ -18,7 +18,7 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >
 > Upstream: [DarkionAvey/windhawk-taskbar-centered-condensed](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed).
 > This fork ([vitaliiorlov/windhawk-taskbar-centered-condensed](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed))
-> tracks upstream closely and adds four things on top.
+> tracks upstream closely and adds five things on top.
 >
 > ### What's different from upstream
 >
@@ -49,6 +49,17 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    indicator as the flyout is positioned, on whichever monitor Windows opens
 >    it, clamped to that monitor's work area. Controlled by the
 >    `MoveFlyoutKeyboardLayout` setting (on by default).
+>
+> 5. **The Notification Center opens beside the island from the first click.**
+>    Upstream moves the clock and calendar flyout as Explorer reveals it, and
+>    recognises it by its window title. On the first open after Explorer
+>    starts, the window is revealed before it has a size or that title, so it
+>    opened at the right edge of the screen. This fork also shifts the
+>    position Explorer computes for the flyout
+>    (`CActionCenterExperienceManager::GetViewPosition` in `twinui.pcshell.dll`),
+>    so every open lands where upstream's code puts the later ones. Follows
+>    the `MoveFlyoutNotificationCenter` and `NotificationCenterPrimaryOnly`
+>    settings.
 >
 > Everything else — the island auto-scaling, the WindhawkBlur engine, flyout
 > monitor resolution, the Y-above-taskbar clamp and Notification-Center

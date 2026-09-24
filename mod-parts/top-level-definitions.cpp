@@ -461,3 +461,32 @@ void LogInputSwitchPlacementToFileTai(PCWSTR monitorName,
            cursorPos.x, cursorPos.y);
   fclose(f);
 }
+
+// Fork addition: the Notification Center is also placed through Explorer's
+// GetViewPosition, the rect Explorer pushes to the flyout on every open, so
+// that gets its own line too. viewRect is the rect Windows computed; placedX is
+// where the hook moved its left edge. trayRight is the island tray's right edge
+// in monitor-relative DIPs.
+void LogNotificationCenterPlacementToFileTai(PCWSTR monitorName,
+                                             UINT monitorDpi,
+                                             int trayRightDip,
+                                             RECT const& viewRect,
+                                             int placedX) {
+  FILE* f = OpenPopupLogFileTai();
+  if (!f) {
+    return;
+  }
+  SYSTEMTIME st{};
+  GetLocalTime(&st);
+  POINT cursorPos{};
+  GetCursorPos(&cursorPos);
+  fwprintf(f,
+           L"%02d:%02d:%02d.%03d NotificationCenter monitor=%s monitorDpi=%u "
+           L"trayRight=%d viewRect=(x=%ld,y=%ld,cx=%ld,cy=%ld) placedX=%d "
+           L"cursor=(%ld,%ld)\n",
+           st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, monitorName,
+           monitorDpi, trayRightDip, viewRect.left, viewRect.top,
+           viewRect.right - viewRect.left, viewRect.bottom - viewRect.top,
+           placedX, cursorPos.x, cursorPos.y);
+  fclose(f);
+}
