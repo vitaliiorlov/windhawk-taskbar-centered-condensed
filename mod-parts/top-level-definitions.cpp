@@ -490,3 +490,46 @@ void LogNotificationCenterPlacementToFileTai(PCWSTR monitorName,
            placedX, cursorPos.x, cursorPos.y);
   fclose(f);
 }
+
+// Fork addition: the taskbar's right-click menus. menu is TrayContextMenu or
+// StartButtonContextMenu; edge is the island edge the menu is placed against
+// (the tray's right, the start button's left). Stage "anchor" is the point the
+// menu opens at: windows is Windows' point, placed the moved one. A tray menu
+// then gets "moved" or "kept" once it has opened: windows is the top-left
+// corner XAML gave it, placed where it ended up. All values are root-relative
+// DIPs, which on a horizontal taskbar are monitor-relative.
+void LogContextMenuPlacementToFileTai(PCWSTR menu,
+                                      PCWSTR stage,
+                                      PCWSTR monitorName,
+                                      int edgeDip,
+                                      float rootWidthDip,
+                                      float marginDip,
+                                      float menuWidthDip,
+                                      float menuHeightDip,
+                                      float windowsX,
+                                      float windowsY,
+                                      float placedX,
+                                      float placedY) {
+  FILE* f = OpenPopupLogFileTai();
+  if (!f) {
+    return;
+  }
+  SYSTEMTIME st{};
+  GetLocalTime(&st);
+  POINT cursorPos{};
+  GetCursorPos(&cursorPos);
+  fwprintf(f,
+           L"%02d:%02d:%02d.%03d %s %s monitor=%s edge=%d rootW=%.2f "
+           L"margin=%.2f menu=%.2fx%.2f windows=(%.2f,%.2f) "
+           L"placed=(%.2f,%.2f) cursor=(%ld,%ld)\n",
+           st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, menu, stage,
+           monitorName, edgeDip, rootWidthDip, marginDip, menuWidthDip,
+           menuHeightDip, windowsX, windowsY, placedX, placedY, cursorPos.x,
+           cursorPos.y);
+  fclose(f);
+}
+
+// Fork addition: defined in win-dock-mod.cpp, called from the dependencies'
+// HookSystemTraySymbols and HookTaskbarViewDllSymbolsStartButtonPosition.
+bool HookTrayContextMenuPositionTai(HMODULE systemTrayModule);
+bool HookStartButtonContextMenuPositionTai(HMODULE taskbarViewModule);

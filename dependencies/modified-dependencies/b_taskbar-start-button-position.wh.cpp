@@ -1103,6 +1103,7 @@ bool HookTaskbarViewDllSymbolsStartButtonPosition(HMODULE module) {
             ShowStartButtonContextMenuResumeCoro_Hook,
         },
     };
+    HookStartButtonContextMenuPositionTai(module);
     return HookSymbols(module, symbolHooks, ARRAYSIZE(symbolHooks));
 }
 void HandleLoadedModuleIfTaskbarView(HMODULE module, LPCWSTR lpLibFileName) {

@@ -31,6 +31,7 @@
 #include <winrt/Windows.UI.Core.h>
 #include <winrt/Windows.UI.Text.h>
 #include <winrt/Windows.UI.Xaml.Automation.h>
+#include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
 #include <winrt/Windows.UI.Xaml.Data.h>
 #include <winrt/Windows.UI.Xaml.Hosting.h>
@@ -3660,6 +3661,433 @@ static void StopNotificationCenterHookWaitTai() {
   }
 }
 
+// Fork addition: open the taskbar's right-click menus at the island instead of
+// at the edges of the screen -- the clock's and the system tray icons'
+// (network, volume, battery, language and the rest) at its right end, the
+// Start button's at its left end.
+//
+// Tray icons: SystemTray.dll shows their menus through
+// ContextMenuPositionHelper. With the feature set current builds ship,
+// ShowContextMenuFlyout opens the MenuFlyout at a point from GetShowPosition:
+// ContextMenuMargin in from the taskbar root's top-right corner, whichever
+// icon was clicked. XAML puts the menu's top-left corner on that point and
+// flips it to the point's left or top on an axis where it does not fit
+// (measured on this build, not documented). At the corner the menu flips above
+// and to the left, next to where the tray ends on a stock taskbar -- except a
+// one-item menu, which fits under the point and covers the taskbar. The
+// GetShowPosition hook moves the point left by as much as the Notification
+// Center and Quick Settings move, and once the menu has opened, the menu's
+// Opened handler (PositionContextMenuPopup) puts its bottom-right corner on the
+// point, where it would open to the right of it. Builds that centre the menu on
+// its icon instead (AlignContextMenuPopup) never call GetShowPosition, and XAML
+// already sees the icon where the island draws it, so those menus are left
+// alone.
+//
+// Start button: with MoveFlyoutStartMenu on, the start button position
+// dependency reports a left-aligned taskbar while this menu opens, so
+// ShowStartButtonContextMenuAsync opens it TopEdgeAlignedLeft at
+// GetLeadingStartFlyoutPosition, a margin in from the taskbar frame's top-left
+// corner -- the left edge of the screen. The hook moves the point right by as
+// much as the Start and Search menus move.
+//
+// Both keep Windows' place relative to the flyouts beside them, inside the
+// island whatever AlignFlyoutInner says, as Windows keeps them inside the
+// taskbar.
+
+// The hooks only get XAML elements, so ApplyStyle records which monitor each
+// taskbar's XamlRoot is on. Keyed by the XamlRoot's COM identity, which is
+// compared and never dereferenced.
+static std::mutex g_xamlRootMonitorNamesMutexTai;
+static std::unordered_map<void*, std::wstring> g_xamlRootMonitorNamesTai;
+
+static void* GetComIdentityTai(winrt::Windows::Foundation::IInspectable const& object) {
+  return winrt::get_abi(object.as<winrt::Windows::Foundation::IUnknown>());
+}
+
+static void RecordXamlRootMonitorTai(FrameworkElement const& xamlRootContent,
+                                     std::wstring const& monitorName) {
+  void* identity = nullptr;
+  try {
+    if (auto xamlRoot = xamlRootContent.XamlRoot()) {
+      identity = GetComIdentityTai(xamlRoot);
+    }
+  } catch (...) {
+    // Never let the record fail an ApplyStyle pass.
+  }
+  if (!identity) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(g_xamlRootMonitorNamesMutexTai);
+  auto [it, inserted] = g_xamlRootMonitorNamesTai.try_emplace(identity, monitorName);
+  if (!inserted && it->second != monitorName) {
+    it->second = monitorName;
+  }
+}
+
+static bool TryGetXamlRootMonitorTai(XamlRoot const& xamlRoot,
+                                     std::wstring* monitorName) {
+  void* identity = GetComIdentityTai(xamlRoot);
+  std::lock_guard<std::mutex> lock(g_xamlRootMonitorNamesMutexTai);
+  auto it = g_xamlRootMonitorNamesTai.find(identity);
+  if (it == g_xamlRootMonitorNamesTai.end()) {
+    return false;
+  }
+  *monitorName = it->second;
+  return true;
+}
+
+// WindowsUdk.UI.Shell.TaskbarLocation.
+constexpr int kTaskbarLocationTopTai = 1;
+constexpr int kTaskbarLocationBottomTai = 3;
+
+// Monitor, DPI-scaled flyout inner padding and island geometry for the taskbar
+// that owns xamlRoot.
+struct ContextMenuTaskbarTai {
+  std::wstring monitorName;
+  TaskbarFlyoutStateSnapshot state;
+  float innerPaddingDip;
+};
+
+static bool TryGetContextMenuTaskbarTai(XamlRoot const& xamlRoot,
+                                        ContextMenuTaskbarTai* taskbar) {
+  if (!xamlRoot || !TryGetXamlRootMonitorTai(xamlRoot, &taskbar->monitorName) ||
+      !TryGetTaskbarFlyoutStateSnapshot(taskbar->monitorName, &taskbar->state)) {
+    return false;
+  }
+  float rasterizationScale = static_cast<float>(xamlRoot.RasterizationScale());
+  if (!(rasterizationScale > 0.0f)) {
+    rasterizationScale = 1.0f;
+  }
+  taskbar->innerPaddingDip =
+      GetFlyoutInnerPaddingPx(rasterizationScale) / rasterizationScale;
+  return true;
+}
+
+// Handed from the GetShowPosition hook to the PositionContextMenuPopup hook for
+// the menu being opened on this thread. Values are root DIPs. Trivial members
+// only, as it is thread_local.
+struct TrayContextMenuPlacementTai {
+  bool pending;
+  void* grid;  // The icon's Grid, compared never dereferenced.
+  ULONGLONG tick;
+  float rootWidth;
+  float margin;
+  float anchorX;  // Where the menu's right edge goes.
+  float anchorY;  // Where its bottom goes, or its top under a top taskbar.
+  bool above;
+  int trayRight;
+  WCHAR monitorName[CCHDEVICENAME];
+};
+static thread_local TrayContextMenuPlacementTai g_trayContextMenuPlacementTai;
+
+static void MoveTrayContextMenuAnchorTai(winrt::Windows::Foundation::Point& position,
+                                         int taskbarLocation,
+                                         double margin,
+                                         Controls::Grid const& grid,
+                                         double rootWidth) {
+  auto& placement = g_trayContextMenuPlacementTai;
+  placement.pending = false;
+  if (g_unloading ||
+      (taskbarLocation != kTaskbarLocationTopTai &&
+       taskbarLocation != kTaskbarLocationBottomTai) ||
+      Wh_GetIntSetting(L"MoveTrayContextMenus") == 0) {
+    return;
+  }
+  ContextMenuTaskbarTai taskbar;
+  if (!TryGetContextMenuTaskbarTai(grid.XamlRoot(), &taskbar)) {
+    return;
+  }
+  if (taskbar.state.lastRightMostEdgeTray <= 0) {
+    Wh_Log(L"[TrayContextMenu] No tray recorded for monitor %s",
+           taskbar.monitorName.c_str());
+    return;
+  }
+  // The point is relative to the grid. Move it only when it is the root's
+  // corner described above; a point Windows derives some other way is kept.
+  const auto gridOrigin =
+      grid.TransformToVisual(nullptr).TransformPoint({0.0f, 0.0f});
+  const float windowsAnchorX = gridOrigin.X + position.X;
+  const float cornerX = static_cast<float>(rootWidth - margin);
+  if (std::abs(windowsAnchorX - cornerX) > 1.0f) {
+    Wh_Log(L"[TrayContextMenu] %s: anchor %.2f is not the corner %.2f",
+           taskbar.monitorName.c_str(), windowsAnchorX, cornerX);
+    return;
+  }
+  // As far as PlaceNotificationCenterViewRectTai moves the Notification Center
+  // with AlignFlyoutInner on, and never past Windows' own corner.
+  const float shift =
+      std::min(0.0f, taskbar.state.lastRightMostEdgeTray +
+                         taskbar.innerPaddingDip - static_cast<float>(rootWidth));
+  position.X += shift;
+  placement.pending = true;
+  placement.grid = winrt::get_abi(grid);
+  placement.tick = GetTickCount64();
+  placement.rootWidth = static_cast<float>(rootWidth);
+  placement.margin = static_cast<float>(margin);
+  placement.anchorX = cornerX + shift;
+  placement.anchorY = gridOrigin.Y + position.Y;
+  placement.above = taskbarLocation == kTaskbarLocationBottomTai;
+  placement.trayRight = taskbar.state.lastRightMostEdgeTray;
+  wcsncpy_s(placement.monitorName, taskbar.monitorName.c_str(), _TRUNCATE);
+  Wh_Log(L"[TrayContextMenu] %s: anchor %.2f -> %.2f",
+         taskbar.monitorName.c_str(), cornerX, placement.anchorX);
+  LogContextMenuPlacementToFileTai(
+      L"TrayContextMenu", L"anchor", placement.monitorName, placement.trayRight,
+      placement.rootWidth, placement.margin, 0.0f, 0.0f, cornerX,
+      placement.anchorY, placement.anchorX, placement.anchorY);
+}
+
+// XAML put a corner of the menu on the point, so wherever it landed is within
+// one menu size of the target. An offset further out is not the menu's
+// position; it is logged and left alone.
+static bool ShouldSettleContextMenuOffsetTai(float placed,
+                                             float target,
+                                             float menuSize) {
+  const float error = std::abs(placed - target);
+  return error > 0.5f && error <= menuSize + 1.0f;
+}
+
+static void SettleTrayContextMenuTai(Controls::Primitives::Popup const& popup,
+                                     Controls::Grid const& grid) {
+  auto& placement = g_trayContextMenuPlacementTai;
+  if (!placement.pending) {
+    return;
+  }
+  placement.pending = false;
+  constexpr ULONGLONG kPlacementTtlMs = 10000;
+  if (g_unloading || placement.grid != winrt::get_abi(grid) ||
+      GetTickCount64() - placement.tick > kPlacementTtlMs) {
+    return;
+  }
+  auto menu = popup.Child().try_as<FrameworkElement>();
+  if (!menu) {
+    return;
+  }
+  const float menuWidth = static_cast<float>(menu.ActualWidth());
+  const float menuHeight = static_cast<float>(menu.ActualHeight());
+  if (!(menuWidth > 0.0f) || !(menuHeight > 0.0f)) {
+    return;
+  }
+  // The menu's right edge on the point, kept in the root with the margin
+  // Windows' AlignContextMenuPopup keeps; its bottom on the point, or its top
+  // under a top taskbar.
+  const float left = std::max(
+      placement.margin,
+      std::min(placement.anchorX - menuWidth,
+               placement.rootWidth - placement.margin - menuWidth));
+  const float top =
+      placement.above ? placement.anchorY - menuHeight : placement.anchorY;
+  const float placedLeft = static_cast<float>(popup.HorizontalOffset());
+  const float placedTop = static_cast<float>(popup.VerticalOffset());
+  const bool moveX = ShouldSettleContextMenuOffsetTai(placedLeft, left, menuWidth);
+  const bool moveY = ShouldSettleContextMenuOffsetTai(placedTop, top, menuHeight);
+  if (moveX) {
+    popup.HorizontalOffset(left);
+  }
+  if (moveY) {
+    popup.VerticalOffset(top);
+  }
+  Wh_Log(L"[TrayContextMenu] %s: opened at (%.2f,%.2f), %.2fx%.2f, now (%.2f,%.2f)",
+         placement.monitorName, placedLeft, placedTop, menuWidth, menuHeight,
+         moveX ? left : placedLeft, moveY ? top : placedTop);
+  LogContextMenuPlacementToFileTai(
+      L"TrayContextMenu", (moveX || moveY) ? L"moved" : L"kept",
+      placement.monitorName, placement.trayRight, placement.rootWidth,
+      placement.margin, menuWidth, menuHeight, placedLeft, placedTop,
+      moveX ? left : placedLeft, moveY ? top : placedTop);
+}
+
+// The Point is returned through a hidden pointer, as MSVC does for a class with
+// constructors, so it is spelled out as the first argument.
+using ContextMenuPositionHelper_GetShowPosition_t =
+    winrt::Windows::Foundation::Point*(WINAPI*)(
+        winrt::Windows::Foundation::Point* result,
+        int taskbarLocation,
+        double margin,
+        void* grid,  // Grid const&
+        double rootWidth,
+        double rootHeight);
+ContextMenuPositionHelper_GetShowPosition_t
+    ContextMenuPositionHelper_GetShowPosition_Original;
+winrt::Windows::Foundation::Point* WINAPI
+ContextMenuPositionHelper_GetShowPosition_Hook(
+    winrt::Windows::Foundation::Point* result,
+    int taskbarLocation,
+    double margin,
+    void* grid,
+    double rootWidth,
+    double rootHeight) {
+  g_hookCallCounter++;
+  auto* position = ContextMenuPositionHelper_GetShowPosition_Original(
+      result, taskbarLocation, margin, grid, rootWidth, rootHeight);
+  if (position && grid) {
+    try {
+      MoveTrayContextMenuAnchorTai(
+          *position, taskbarLocation, margin,
+          *static_cast<Controls::Grid const*>(grid), rootWidth);
+    } catch (...) {
+      // Keep Windows' point: an exception must not unwind into Explorer.
+      g_trayContextMenuPlacementTai.pending = false;
+    }
+  }
+  g_hookCallCounter--;
+  return position;
+}
+
+// The last argument is not used by current builds.
+using ContextMenuPositionHelper_PositionContextMenuPopup_t =
+    void(WINAPI*)(void* popup,  // Popup const&
+                  void* grid,   // Grid const&
+                  double margin,
+                  int taskbarLocation,
+                  double extra);
+ContextMenuPositionHelper_PositionContextMenuPopup_t
+    ContextMenuPositionHelper_PositionContextMenuPopup_Original;
+void WINAPI ContextMenuPositionHelper_PositionContextMenuPopup_Hook(
+    void* popup,
+    void* grid,
+    double margin,
+    int taskbarLocation,
+    double extra) {
+  g_hookCallCounter++;
+  ContextMenuPositionHelper_PositionContextMenuPopup_Original(
+      popup, grid, margin, taskbarLocation, extra);
+  if (popup && grid) {
+    try {
+      SettleTrayContextMenuTai(
+          *static_cast<Controls::Primitives::Popup const*>(popup),
+          *static_cast<Controls::Grid const*>(grid));
+    } catch (...) {
+      // Keep the menu where it is: an exception must not unwind into Explorer.
+    }
+  }
+  g_hookCallCounter--;
+}
+
+// Called from the taskbar-icon-size dependency's HookSystemTraySymbols, which
+// runs whenever SystemTray.dll is or becomes loaded.
+bool HookTrayContextMenuPositionTai(HMODULE systemTrayModule) {
+  WindhawkUtils::SYMBOL_HOOK systemTrayHooks[] = {
+      {{LR"(struct winrt::Windows::Foundation::Point __cdecl ContextMenuPositionHelper::GetShowPosition(enum winrt::WindowsUdk::UI::Shell::TaskbarLocation,double,struct winrt::Windows::UI::Xaml::Controls::Grid const &,double,double))"},
+       &ContextMenuPositionHelper_GetShowPosition_Original,
+       ContextMenuPositionHelper_GetShowPosition_Hook},
+      {{LR"(void __cdecl ContextMenuPositionHelper::PositionContextMenuPopup(struct winrt::Windows::UI::Xaml::Controls::Primitives::Popup const &,struct winrt::Windows::UI::Xaml::Controls::Grid const &,double,enum winrt::WindowsUdk::UI::Shell::TaskbarLocation,double))"},
+       &ContextMenuPositionHelper_PositionContextMenuPopup_Original,
+       ContextMenuPositionHelper_PositionContextMenuPopup_Hook},
+  };
+  const bool hooked = WindhawkUtils::HookSymbols(
+      systemTrayModule, systemTrayHooks, ARRAYSIZE(systemTrayHooks));
+  Wh_Log(L"[TrayContextMenu] ContextMenuPositionHelper hooks %s",
+         hooked ? L"set" : L"unavailable");
+  return hooked;
+}
+
+static void MoveStartButtonContextMenuAnchorTai(
+    winrt::Windows::Foundation::Point& position,
+    int taskbarLocation,
+    FrameworkElement const& taskbarFrame,
+    Thickness const& margin) {
+  if (g_unloading || !g_settings_startbuttonposition.startMenuOnTheLeft ||
+      (taskbarLocation != kTaskbarLocationTopTai &&
+       taskbarLocation != kTaskbarLocationBottomTai)) {
+    return;
+  }
+  // The point is relative to the frame. Move it only when it is the frame's
+  // leading corner described above; a point Windows derives some other way is
+  // kept.
+  if (taskbarFrame.FlowDirection() != FlowDirection::LeftToRight ||
+      std::abs(position.X - static_cast<float>(margin.Left)) > 0.5f) {
+    return;
+  }
+  auto xamlRoot = taskbarFrame.XamlRoot();
+  ContextMenuTaskbarTai taskbar;
+  if (!TryGetContextMenuTaskbarTai(xamlRoot, &taskbar)) {
+    return;
+  }
+  if (!(taskbar.state.lastStartButtonXCalculated > 0.0f)) {
+    Wh_Log(L"[StartButtonContextMenu] No start button recorded for monitor %s",
+           taskbar.monitorName.c_str());
+    return;
+  }
+  // As far as the Start and Search menus move with AlignFlyoutInner on (see
+  // startbuttonposition_start_menu_position_code.cpp), and never left of
+  // Windows' own point.
+  const auto frameOrigin =
+      taskbarFrame.TransformToVisual(nullptr).TransformPoint({0.0f, 0.0f});
+  const float shift =
+      std::max(0.0f, taskbar.state.lastStartButtonXCalculated -
+                         taskbar.innerPaddingDip - frameOrigin.X);
+  const float windowsX = frameOrigin.X + position.X;
+  const float windowsY = frameOrigin.Y + position.Y;
+  position.X += shift;
+  Wh_Log(L"[StartButtonContextMenu] %s: anchor %.2f -> %.2f",
+         taskbar.monitorName.c_str(), windowsX, windowsX + shift);
+  LogContextMenuPlacementToFileTai(
+      L"StartButtonContextMenu", L"anchor", taskbar.monitorName.c_str(),
+      static_cast<int>(taskbar.state.lastStartButtonXCalculated + 0.5f),
+      static_cast<float>(xamlRoot.Size().Width),
+      static_cast<float>(margin.Left), 0.0f, 0.0f, windowsX, windowsY,
+      windowsX + shift, windowsY);
+}
+
+// The Point is returned through a hidden pointer, like GetShowPosition's. The
+// TaskbarFrame is passed by value, as a pointer to the caller's copy, which the
+// function releases.
+using GetLeadingStartFlyoutPosition_t =
+    winrt::Windows::Foundation::Point*(WINAPI*)(
+        winrt::Windows::Foundation::Point* result,
+        int taskbarLocation,
+        void* taskbarFrame,
+        Thickness const* margin);
+GetLeadingStartFlyoutPosition_t GetLeadingStartFlyoutPosition_Original;
+winrt::Windows::Foundation::Point* WINAPI GetLeadingStartFlyoutPosition_Hook(
+    winrt::Windows::Foundation::Point* result,
+    int taskbarLocation,
+    void* taskbarFrame,
+    Thickness const* margin) {
+  g_hookCallCounter++;
+  // Take a reference before the call releases the caller's.
+  FrameworkElement frame{nullptr};
+  try {
+    if (void* frameAbi = taskbarFrame ? *static_cast<void**>(taskbarFrame)
+                                      : nullptr) {
+      winrt::Windows::Foundation::IUnknown frameUnknown;
+      winrt::copy_from_abi(frameUnknown, frameAbi);
+      frame = frameUnknown.try_as<FrameworkElement>();
+    }
+  } catch (...) {
+    frame = nullptr;
+  }
+  auto* position = GetLeadingStartFlyoutPosition_Original(
+      result, taskbarLocation, taskbarFrame, margin);
+  if (position && frame && margin) {
+    try {
+      MoveStartButtonContextMenuAnchorTai(*position, taskbarLocation, frame,
+                                          *margin);
+    } catch (...) {
+      // Keep Windows' point: an exception must not unwind into Explorer.
+    }
+  }
+  g_hookCallCounter--;
+  return position;
+}
+
+// Called from the start button position dependency's
+// HookTaskbarViewDllSymbolsStartButtonPosition, which runs whenever
+// Taskbar.View.dll is or becomes loaded.
+bool HookStartButtonContextMenuPositionTai(HMODULE taskbarViewModule) {
+  WindhawkUtils::SYMBOL_HOOK taskbarViewHooks[] = {
+      {{LR"(struct winrt::Windows::Foundation::Point __cdecl GetLeadingStartFlyoutPosition(enum winrt::WindowsUdk::UI::Shell::TaskbarLocation,struct winrt::Taskbar::TaskbarFrame,struct winrt::Windows::UI::Xaml::Thickness const &))"},
+       &GetLeadingStartFlyoutPosition_Original,
+       GetLeadingStartFlyoutPosition_Hook},
+  };
+  const bool hooked = WindhawkUtils::HookSymbols(
+      taskbarViewModule, taskbarViewHooks, ARRAYSIZE(taskbarViewHooks));
+  Wh_Log(L"[StartButtonContextMenu] GetLeadingStartFlyoutPosition hook %s",
+         hooked ? L"set" : L"unavailable");
+  return hooked;
+}
+
 bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorName) {
   if (!xamlRootContent) {
     Wh_Log(L"xamlRootContent is null");
@@ -3675,6 +4103,8 @@ bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorNam
   std::lock_guard<std::recursive_mutex> stateLock(stateHandle->mutex);
   auto& state = *stateHandle;
   Wh_Log(L"ApplyStyle for monitor: %s", monitorName.c_str());
+  // Fork addition: see g_xamlRootMonitorNamesTai.
+  RecordXamlRootMonitorTai(xamlRootContent, monitorName);
   g_scheduled_low_priority_update = false;
   bool forceStyleApply = false;
   int forceStyleApplyPasses = g_force_style_apply_passes.load();
