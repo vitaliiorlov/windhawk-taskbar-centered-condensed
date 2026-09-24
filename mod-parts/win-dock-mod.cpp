@@ -3257,6 +3257,218 @@ void ClearAllTaskbarWindowRegionsTai() {
       0);
 }
 
+// Fork addition: open the keyboard layout flyout -- the input switcher, shown
+// by clicking the language indicator or pressing Win+Space -- above the
+// language indicator on the island instead of at the right edge of the screen.
+//
+// InputSwitch.dll hosts that flyout inside explorer.exe, as a top-level
+// Shell_InputSwitchTopLevelWindow driven from its own UI thread. It centres the
+// window on an anchor rectangle from the tray, and that anchor is the tray at
+// its stock position: this mod moves the tray with a composition Offset on
+// SystemTrayFrameGrid, which XAML layout never sees. The window is only ever
+// moved by FlyoutWindowHost::SetWindowPosition, a SetWindowPos without
+// SWP_NOMOVE, so SetWindowPos_Hook re-centres it there, before it is drawn.
+// Windows' choice of monitor and its Y above the taskbar are kept.
+//
+// That hook runs on the input switcher's thread, where the taskbar's XAML must
+// not be touched, so ApplyStyle records where each monitor's indicator is drawn
+// while it has the tray's target geometry in hand. Values are monitor-relative
+// DIPs, already post island-scale, keyed by monitor device name.
+static std::mutex g_languageIndicatorCentersMutex;
+static std::unordered_map<std::wstring, float> g_languageIndicatorCentersXDip;
+
+static bool IsLanguageIndicatorContentTai(winrt::hstring const& className) {
+  return className == L"SystemTray.LanguageTextIconContent" ||
+         className == L"SystemTray.LanguageImageIconContent";
+}
+
+// Depth-first search for the indicator's content, which is only the glyph,
+// then up to the SystemTray.IconView that owns it, which is the whole button.
+// Collapsed subtrees are skipped, so a hidden indicator counts as absent.
+static FrameworkElement FindLanguageIndicatorTai(
+    FrameworkElement const& systemTrayFrameGrid) {
+  constexpr int kMaxDepth = 16;
+  std::vector<std::pair<FrameworkElement, int>> pending;
+  pending.emplace_back(systemTrayFrameGrid, 0);
+  while (!pending.empty()) {
+    auto [element, depth] = std::move(pending.back());
+    pending.pop_back();
+    if (element.Visibility() !=
+        winrt::Windows::UI::Xaml::Visibility::Visible) {
+      continue;
+    }
+    if (depth > 0 &&
+        IsLanguageIndicatorContentTai(winrt::get_class_name(element))) {
+      for (auto parent = Media::VisualTreeHelper::GetParent(element)
+                             .try_as<FrameworkElement>();
+           parent && parent != systemTrayFrameGrid;
+           parent = Media::VisualTreeHelper::GetParent(parent)
+                        .try_as<FrameworkElement>()) {
+        if (winrt::get_class_name(parent) == L"SystemTray.IconView") {
+          return parent;
+        }
+      }
+      return element;
+    }
+    if (depth >= kMaxDepth) {
+      continue;
+    }
+    const int childrenCount =
+        Media::VisualTreeHelper::GetChildrenCount(element);
+    for (int i = childrenCount - 1; i >= 0; i--) {
+      if (auto child = Media::VisualTreeHelper::GetChild(element, i)
+                           .try_as<FrameworkElement>()) {
+        pending.emplace_back(std::move(child), depth + 1);
+      }
+    }
+  }
+  return nullptr;
+}
+
+// Grid-local coordinates never include SystemTrayFrameGrid's own composition
+// transform, so replay the one ApplyStyle gives it: the arranged position,
+// plus the Offset the tray animation targets, then the island scale about the
+// grid visual's CenterPoint. trayFrame sits directly in the XAML root and the
+// grid directly in trayFrame, so their ActualOffsets add up to the grid's
+// arranged position in the root.
+static void RecordLanguageIndicatorCenterTai(
+    std::wstring const& monitorName,
+    FrameworkElement const& trayFrame,
+    FrameworkElement const& systemTrayFrameGrid,
+    float targetOffsetXTray,
+    float trayScaleCenterLocalX,
+    float targetTaskbarIslandScale) {
+  std::optional<float> centerXDip;
+  if (!g_unloading) {
+    try {
+      if (auto indicator = FindLanguageIndicatorTai(systemTrayFrameGrid)) {
+        const float width = static_cast<float>(indicator.ActualWidth());
+        if (width > 0.0f) {
+          const float localCenterX =
+              indicator.TransformToVisual(systemTrayFrameGrid)
+                  .TransformPoint({width / 2.0f, 0.0f})
+                  .X;
+          const float gridVisualLeft = trayFrame.ActualOffset().x +
+                                       systemTrayFrameGrid.ActualOffset().x +
+                                       targetOffsetXTray;
+          const float center = ApplyScaleToScreenX(
+              gridVisualLeft + localCenterX,
+              gridVisualLeft + trayScaleCenterLocalX,
+              targetTaskbarIslandScale);
+          if (std::isfinite(center)) {
+            centerXDip = center;
+          }
+        }
+      }
+    } catch (...) {
+      centerXDip.reset();
+    }
+  }
+  std::lock_guard<std::mutex> lock(g_languageIndicatorCentersMutex);
+  auto it = g_languageIndicatorCentersXDip.find(monitorName);
+  if (!centerXDip) {
+    if (it != g_languageIndicatorCentersXDip.end()) {
+      g_languageIndicatorCentersXDip.erase(it);
+      Wh_Log(L"[InputSwitch] %s: no language indicator", monitorName.c_str());
+    }
+    return;
+  }
+  if (it == g_languageIndicatorCentersXDip.end() ||
+      std::abs(it->second - *centerXDip) > 0.5f) {
+    g_languageIndicatorCentersXDip[monitorName] = *centerXDip;
+    Wh_Log(L"[InputSwitch] %s: language indicator centre at %.2f DIP",
+           monitorName.c_str(), *centerXDip);
+  }
+}
+
+static bool TryGetLanguageIndicatorCenterXDipTai(
+    std::wstring const& monitorName,
+    float* centerXDip) {
+  std::lock_guard<std::mutex> lock(g_languageIndicatorCentersMutex);
+  auto it = g_languageIndicatorCentersXDip.find(monitorName);
+  if (it == g_languageIndicatorCentersXDip.end()) {
+    return false;
+  }
+  *centerXDip = it->second;
+  return true;
+}
+
+static void ClearLanguageIndicatorCentersTai() {
+  std::lock_guard<std::mutex> lock(g_languageIndicatorCentersMutex);
+  g_languageIndicatorCentersXDip.clear();
+}
+
+// Returns the X that centres the flyout on the language indicator of the
+// monitor Windows placed it on, clamped to that monitor's work area. Staying
+// on Windows' monitor means this move never changes the flyout's DPI.
+static int PlaceInputSwitchFlyoutXTai(HWND hWnd,
+                                      int x,
+                                      int y,
+                                      int cx,
+                                      int cy,
+                                      UINT flags) {
+  // FlyoutWindowHost::SetWindowPosition passes SWP_NOSIZE with a zero size;
+  // FlyoutWindowHost::SetWindowSize has sized the window just before.
+  if ((flags & SWP_NOSIZE) || cx <= 0 || cy <= 0) {
+    RECT windowRect{};
+    if (!GetWindowRect(hWnd, &windowRect)) {
+      return x;
+    }
+    cx = windowRect.right - windowRect.left;
+    cy = windowRect.bottom - windowRect.top;
+  }
+  if (cx <= 0 || cy <= 0) {
+    return x;
+  }
+  const RECT proposedRect{x, y, x + cx, y + cy};
+  HMONITOR monitor = MonitorFromRect(&proposedRect, MONITOR_DEFAULTTONEAREST);
+  MONITORINFO monitorInfo{.cbSize = sizeof(MONITORINFO)};
+  if (!monitor || !GetMonitorInfoW(monitor, &monitorInfo)) {
+    return x;
+  }
+  const std::wstring monitorName = GetMonitorName(monitor);
+  PCWSTR anchor = L"language";
+  float anchorCenterXDip = 0.0f;
+  if (!TryGetLanguageIndicatorCenterXDipTai(monitorName, &anchorCenterXDip)) {
+    // Secondary taskbars have no language indicator. Windows centres the
+    // flyout on the whole stock tray, so centre it on the island's tray.
+    TaskbarFlyoutStateSnapshot taskbarState;
+    if (!TryGetTaskbarFlyoutStateSnapshot(monitorName, &taskbarState) ||
+        taskbarState.lastRightMostEdgeTray <= 0 ||
+        taskbarState.lastLeftMostEdgeTray >=
+            static_cast<float>(taskbarState.lastRightMostEdgeTray)) {
+      Wh_Log(L"[InputSwitch] No anchor recorded for monitor %s",
+             monitorName.c_str());
+      return x;
+    }
+    anchorCenterXDip =
+        (taskbarState.lastLeftMostEdgeTray +
+         static_cast<float>(taskbarState.lastRightMostEdgeTray)) /
+        2.0f;
+    anchor = L"tray";
+  }
+  UINT monitorDpiX = 96;
+  UINT monitorDpiY = 96;
+  if (FAILED(GetDpiForMonitor(monitor, MDT_DEFAULT, &monitorDpiX,
+                              &monitorDpiY)) ||
+      monitorDpiX == 0) {
+    monitorDpiX = 96;
+  }
+  const int anchorCenterX =
+      monitorInfo.rcMonitor.left +
+      static_cast<int>(std::lround(anchorCenterXDip * monitorDpiX / 96.0f));
+  const RECT& workArea = monitorInfo.rcWork;
+  const int newX = std::max(
+      static_cast<int>(workArea.left),
+      std::min(anchorCenterX - (cx / 2), static_cast<int>(workArea.right) - cx));
+  Wh_Log(L"[InputSwitch] %s: anchor=%s centre=%d X %d -> %d (cx=%d)",
+         monitorName.c_str(), anchor, anchorCenterX, x, newX, cx);
+  LogInputSwitchPlacementToFileTai(monitorName.c_str(), anchor,
+                                   anchorCenterXDip, monitorDpiX, x, newX, y,
+                                   cx, cy);
+  return newX;
+}
+
 bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorName) {
   if (!xamlRootContent) {
     Wh_Log(L"xamlRootContent is null");
@@ -4031,6 +4243,10 @@ bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorNam
     state.lastLeftMostEdgeTray = leftMostEdgeTray;
     Wh_SetIntValue((L"lastLeftMostEdgeTray_" + monitorName).c_str(), static_cast<int>(leftMostEdgeTray));
   }
+  // Fork addition: see g_languageIndicatorCentersXDip.
+  RecordLanguageIndicatorCenterTai(monitorName, trayFrame, systemTrayFrameGrid,
+                                   targetOffsetXTray, trayScaleCenterLocalX,
+                                   targetTaskbarIslandScale);
   const auto targetHeightPrelim = (!g_settings.userDefinedFullWidthTaskbarBackground ? g_settings.userDefinedTaskbarHeight : xamlRootContent.ActualHeight());
   if (!g_unloading && targetHeightPrelim <= 0) {
     Wh_Log(L"Error: targetHeightPrelim<=0");
@@ -4411,6 +4627,13 @@ BOOL WINAPI SetWindowPos_Hook(HWND hWnd, HWND hWndInsertAfter, int X, int Y, int
          cx,
          cy,
          uFlags);
+  // Fork addition: see g_languageIndicatorCentersXDip.
+  if (!g_unloading && !(uFlags & SWP_NOMOVE) &&
+      processId == GetCurrentProcessId() &&
+      _wcsicmp(windowClassName.c_str(), L"Shell_InputSwitchTopLevelWindow") == 0 &&
+      Wh_GetIntSetting(L"MoveFlyoutKeyboardLayout") != 0) {
+    X = PlaceInputSwitchFlyoutXTai(hWnd, X, Y, cx, cy, uFlags);
+  }
   if (!g_unloading && userDefinedMoveFlyoutControlCenter && _wcsicmp(processFileName.c_str(), L"ShellHost.exe") == 0 && _wcsicmp(windowClassName.c_str(), L"ControlCenterWindow") == 0) {
     HMONITOR monitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
     if (!monitor) {
@@ -4526,6 +4749,7 @@ void Wh_ModUninit() {
   Wh_ModUninitTBIconSize();
   ResetGlobalVars();
   ClearTaskbarStates();
+  ClearLanguageIndicatorCentersTai();
   {
     std::lock_guard<std::recursive_mutex> settingsLock(g_settingsMutex);
     g_settings.compiledDividedAppPatterns.clear();

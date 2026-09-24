@@ -18,7 +18,7 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >
 > Upstream: [DarkionAvey/windhawk-taskbar-centered-condensed](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed).
 > This fork ([vitaliiorlov/windhawk-taskbar-centered-condensed](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed))
-> tracks upstream closely and adds three things on top.
+> tracks upstream closely and adds four things on top.
 >
 > ### What's different from upstream
 >
@@ -41,6 +41,14 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    One line per flyout open, appended to `windhawk_popup_log.txt` under
 >    `%TEMP%`, so multi-monitor and mixed-DPI placement can be diagnosed
 >    without attaching DebugView.
+>
+> 4. **The keyboard layout flyout opens above the language indicator.**
+>    Clicking the language indicator (or pressing Win+Space) opens a flyout
+>    that Windows centres on the tray's stock position at the right edge of
+>    the screen, far from the island. This fork re-centres it on the language
+>    indicator as the flyout is positioned, on whichever monitor Windows opens
+>    it, clamped to that monitor's work area. Controlled by the
+>    `MoveFlyoutKeyboardLayout` setting (on by default).
 >
 > Everything else — the island auto-scaling, the WindhawkBlur engine, flyout
 > monitor resolution, the Y-above-taskbar clamp and Notification-Center
@@ -148,3 +156,4 @@ Huge thanks to these awesome developers who made this mod possible -- your contr
 | `MoveFlyoutNotificationCenter` | Move Notification Center with Taskbar | When enabled, the Notification Center is moved to align with taskbar size and location. Default is on. | Boolean (true/false) |
 | `AlignFlyoutInner` | Align flyout windows to the inside of the taskbar | When enabled, the flyout windows will be aligned within the bounds of the taskbar. When off, they will be 50% inside the taskbar bounds. Default is on. | Boolean (true/false) |
 | `NotificationCenterPrimaryOnly` | Notification Center on primary monitor only | When enabled, the Notification Center (the clock/calendar popup) is only repositioned when opened on the primary monitor. On secondary monitors it appears at Windows' native default position. Only affects the Notification Center - Start Menu, Search and Control Center are unaffected. Default is off. | Boolean (true/false) |
+| `MoveFlyoutKeyboardLayout` | Move keyboard layout flyout with Taskbar | When enabled, the keyboard layout flyout (opened by clicking the language indicator or pressing Win+Space) is centered above the language indicator on the taskbar instead of at the right edge of the screen. On a monitor whose taskbar has no language indicator it is centered above the tray instead. Default is on. | Boolean (true/false) |
