@@ -73,6 +73,13 @@ class StartButtonPosition(URLProcessor):
                 r"using DwmSetWindowAttribute_t = decltype(&DwmSetWindowAttribute);",
                 read_patch("startbuttonposition_notification_center_hack.cpp"),
             )
+            # Fork addition: the Start button menu hook (win-dock-mod.cpp) rides
+            # on this module's Taskbar.View.dll load handling.
+            .insert_before_literal(
+                "return HookSymbols(module, symbolHooks, ARRAYSIZE(symbolHooks));",
+                "HookStartButtonContextMenuPositionTai(module);\n    ",
+                in_function="bool HookTaskbarViewDllSymbolsStartButtonPosition(HMODULE module)",
+            )
             .text()
         )
 

@@ -191,5 +191,5 @@
 
 - MoveTrayContextMenus: true
   $name: Move tray icon menus with Taskbar
-  $description: When enabled, the right-click menus of the clock and the system tray icons (network, volume, battery, language) open at the right end of the taskbar, lined up with the Notification Center, instead of at the right edge of the screen. Follows "Align flyout windows to the inside of the taskbar". Default is on.
+  $description: When enabled, the right-click menus of the clock and the system tray icons (network, volume, battery, language) open at the right end of the taskbar, lined up with the Notification Center, instead of at the right edge of the screen. Default is on.
   $type: bool
