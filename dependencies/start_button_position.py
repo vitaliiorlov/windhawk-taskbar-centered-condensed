@@ -218,9 +218,16 @@ class StartButtonPosition(URLProcessor):
         )
 
     def _patch_dwm_targeting(self, patch: CppPatcher) -> None:
+        resolve_monitor = (
+            "HMONITOR monitor = ResolveFlyoutMonitorTai(\n"
+            "        hwnd, target == DwmTarget::StartMenu    ? FlyoutKindTai::StartMenu\n"
+            "              : target == DwmTarget::SearchHost ? FlyoutKindTai::Search\n"
+            "                                                : FlyoutKindTai::NotificationCenter,\n"
+            "        !cloak);"
+        )
         patch.replace_literal(
             "HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);",
-            "HMONITOR monitor = ResolveFlyoutMonitorTai(hwnd);",
+            resolve_monitor,
             count=1,
             label="resolve flyout monitor from taskbar invocation",
         )
@@ -232,7 +239,7 @@ class StartButtonPosition(URLProcessor):
         # MONITOR_DPI_TYPE / MDT_DEFAULT / GetDpiForMonitor all come from the
         # taskbar-icon-size module, which is concatenated ahead of this one.
         patch.insert_after_literal(
-            "HMONITOR monitor = ResolveFlyoutMonitorTai(hwnd);",
+            resolve_monitor,
             """
     UINT monitorDpiX = 96;
     UINT monitorDpiY = 96;

@@ -3667,6 +3667,107 @@ long WINAPI CActionCenterExperienceManager_GetViewPosition_Hook(void* pThis,
   return result;
 }
 
+// Fork addition: open the Start menu on the monitor in use when it is opened
+// other than with a taskbar's Start button (the Win key, Ctrl+Esc).
+//
+// XamlLauncher::ShowStartView calls AdjustMonitorConnectedIfNeeded for those,
+// which moves the launcher to the primary monitor unless it is there already,
+// so the Win key always opened Start on the main display. A Start button click
+// skips that call; the launcher was moved to the clicked taskbar's monitor
+// beforehand, with ConnectToMonitor(HWND, POINT). Doing the same with the
+// monitor in use has Windows lay the Start menu, and the Search pane that
+// opens with it, out on that monitor itself; moving the laid-out window
+// afterwards draws it part-way across the wrong monitor.
+//
+// ConnectToMonitor returns false when the launcher is on that monitor already,
+// so its result is not a failure.
+using ImmersiveMonitorHelper_AdjustMonitorConnectedIfNeeded_t =
+    HRESULT(WINAPI*)(void* pThis);
+static ImmersiveMonitorHelper_AdjustMonitorConnectedIfNeeded_t
+    ImmersiveMonitorHelper_AdjustMonitorConnectedIfNeeded_Original = nullptr;
+using ImmersiveMonitorHelper_ConnectToMonitor_t =
+    bool(WINAPI*)(void* pThis, HWND window, POINT point);
+static ImmersiveMonitorHelper_ConnectToMonitor_t
+    ImmersiveMonitorHelper_ConnectToMonitor_Original = nullptr;
+
+// The monitor of the window being worked in; or, when that is the desktop or a
+// taskbar, which belong to no one monitor, the monitor under the mouse.
+static HMONITOR GetMonitorInUseTai() {
+  if (HWND foreground = GetForegroundWindow()) {
+    HWND root = GetAncestor(foreground, GA_ROOTOWNER);
+    WCHAR className[64]{};
+    if (!root || !GetClassNameW(root, className, ARRAYSIZE(className)) ||
+        (_wcsicmp(className, L"Progman") != 0 &&
+         _wcsicmp(className, L"WorkerW") != 0 &&
+         !IsTaskbarWindowClassTai(root))) {
+      if (HMONITOR monitor =
+              MonitorFromWindow(foreground, MONITOR_DEFAULTTONULL)) {
+        return monitor;
+      }
+    }
+  }
+  POINT cursor{};
+  return GetCursorPos(&cursor)
+             ? MonitorFromPoint(cursor, MONITOR_DEFAULTTONULL)
+             : nullptr;
+}
+
+static bool MonitorHasTaskbarTai(HMONITOR monitor) {
+  struct Context {
+    HMONITOR monitor;
+    bool found;
+  } context{monitor, false};
+  EnumWindows(
+      [](HWND hWnd, LPARAM lParam) -> BOOL {
+        auto* context = reinterpret_cast<Context*>(lParam);
+        DWORD pid = 0;
+        if (GetWindowThreadProcessId(hWnd, &pid) &&
+            pid == GetCurrentProcessId() && IsTaskbarWindowClassTai(hWnd) &&
+            GetTaskbarMonitorTai(hWnd) == context->monitor) {
+          context->found = true;
+          return FALSE;
+        }
+        return TRUE;
+      },
+      reinterpret_cast<LPARAM>(&context));
+  return context.found;
+}
+
+HRESULT WINAPI ImmersiveMonitorHelper_AdjustMonitorConnectedIfNeeded_Hook(
+    void* pThis) {
+  if (!g_unloading && ImmersiveMonitorHelper_ConnectToMonitor_Original &&
+      Wh_GetIntSetting(L"StartMenuOnActiveMonitor")) {
+    HMONITOR monitor = GetMonitorInUseTai();
+    MONITORINFOEXW monitorInfo{};
+    monitorInfo.cbSize = sizeof(monitorInfo);
+    if (monitor && MonitorHasTaskbarTai(monitor) &&
+        GetMonitorInfoW(monitor, &monitorInfo)) {
+      const RECT& bounds = monitorInfo.rcMonitor;
+      const POINT center{(bounds.left + bounds.right) / 2,
+                         (bounds.top + bounds.bottom) / 2};
+      ImmersiveMonitorHelper_ConnectToMonitor_Original(pThis, nullptr, center);
+      Wh_Log(L"[StartMenu] opening on the monitor in use: %s",
+             monitorInfo.szDevice);
+      return S_OK;
+    }
+  }
+  return ImmersiveMonitorHelper_AdjustMonitorConnectedIfNeeded_Original(pThis);
+}
+
+static bool HookStartMenuMonitorTai(HMODULE twinuiPcshellModule) {
+  WindhawkUtils::SYMBOL_HOOK twinuiPcshellHooks[] = {
+      {{LR"(public: bool __cdecl ImmersiveMonitorHelper::ConnectToMonitor(struct HWND__ *,struct tagPOINT))"},
+       &ImmersiveMonitorHelper_ConnectToMonitor_Original},
+      {{LR"(public: long __cdecl ImmersiveMonitorHelper::AdjustMonitorConnectedIfNeeded(void))"},
+       &ImmersiveMonitorHelper_AdjustMonitorConnectedIfNeeded_Original,
+       ImmersiveMonitorHelper_AdjustMonitorConnectedIfNeeded_Hook},
+  };
+  const bool hooked = WindhawkUtils::HookSymbols(
+      twinuiPcshellModule, twinuiPcshellHooks, ARRAYSIZE(twinuiPcshellHooks));
+  Wh_Log(L"[StartMenu] monitor hook %s", hooked ? L"set" : L"unavailable");
+  return hooked;
+}
+
 static bool HookNotificationCenterViewPositionTai(HMODULE twinuiPcshellModule) {
   WindhawkUtils::SYMBOL_HOOK twinuiPcshellHooks[] = {
       {{LR"(private: long __cdecl CActionCenterExperienceManager::GetViewPosition(struct tagRECT &))"},
@@ -3677,7 +3778,10 @@ static bool HookNotificationCenterViewPositionTai(HMODULE twinuiPcshellModule) {
       twinuiPcshellModule, twinuiPcshellHooks, ARRAYSIZE(twinuiPcshellHooks));
   Wh_Log(L"[NotificationCenter] GetViewPosition hook %s",
          hooked ? L"set" : L"unavailable");
-  return hooked;
+  // Fork addition: see ImmersiveMonitorHelper_AdjustMonitorConnectedIfNeeded_Hook.
+  // Hooked separately so that either can be missing on a Windows build.
+  const bool startMenuHooked = HookStartMenuMonitorTai(twinuiPcshellModule);
+  return hooked || startMenuHooked;
 }
 
 // A Win32 thread and event rather than std::thread: a std::thread still

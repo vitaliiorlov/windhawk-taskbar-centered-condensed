@@ -244,17 +244,48 @@ static HMONITOR GetFlyoutLayoutMonitorTai(HWND flyoutWindow) {
   return monitor;
 }
 
-HMONITOR ResolveFlyoutMonitorTai(HWND flyoutWindow) {
-  // Fork addition: Windows lays a flyout's window out on the monitor it opens
-  // it on before revealing it; the Start menu's spans that monitor's width
-  // above the taskbar. The guesses below take the monitor of a taskbar under
-  // the cursor, right for a click but not for the Win key (or Win+S) pressed
-  // with the cursor resting over another monitor's taskbar: the Start menu
-  // was moved there still laid out for its own monitor, and drawn part-way
-  // across the other. So the window's own monitor comes first, and the
-  // guesses are left for a window not yet on any one monitor.
-  if (HMONITOR monitor = GetFlyoutLayoutMonitorTai(flyoutWindow)) {
-    return monitor;
+// Fork addition: which flyout ResolveFlyoutMonitorTai is placing.
+enum class FlyoutKindTai { StartMenu, Search, NotificationCenter };
+
+static std::atomic<uintptr_t> g_lastStartMenuMonitorTai{0};
+static std::atomic<ULONGLONG> g_lastStartMenuTimeTai{0};
+
+// showing is false when the window is being hidden.
+HMONITOR ResolveFlyoutMonitorTai(HWND flyoutWindow, FlyoutKindTai kind,
+                                 bool showing) {
+  // Fork addition. The guesses further down take the monitor of a taskbar
+  // under the cursor. Search needs them: Windows opens it on the monitor the
+  // Start menu last used (SearchAppDesktopExperienceView asks the launcher),
+  // not the one whose Search button was clicked. The Start menu and the
+  // Notification Center must not have them. Windows lays those out for the
+  // monitor it opens them on, the Start menu across the whole width above the
+  // taskbar, and a Start menu opened with the Win key while the cursor rested
+  // over another monitor's taskbar was moved there with that layout and drawn
+  // part-way across it. They stay where Windows put them, and Search opening
+  // with the Start menu, as its search pane, goes with it.
+  constexpr ULONGLONG kStartMenuSearchPaneTtlMs = 500;
+  if (kind != FlyoutKindTai::Search) {
+    if (HMONITOR monitor = GetFlyoutLayoutMonitorTai(flyoutWindow)) {
+      if (kind == FlyoutKindTai::StartMenu && showing) {
+        g_lastStartMenuMonitorTai.store(reinterpret_cast<uintptr_t>(monitor),
+                                        std::memory_order_release);
+        g_lastStartMenuTimeTai.store(GetTickCount64(),
+                                     std::memory_order_release);
+      }
+      return monitor;
+    }
+  } else {
+    const ULONGLONG startMenuTime =
+        g_lastStartMenuTimeTai.load(std::memory_order_acquire);
+    const ULONGLONG now = GetTickCount64();
+    HMONITOR startMenuMonitor = reinterpret_cast<HMONITOR>(
+        g_lastStartMenuMonitorTai.load(std::memory_order_acquire));
+    MONITORINFO monitorInfo{.cbSize = sizeof(MONITORINFO)};
+    if (startMenuTime && now >= startMenuTime &&
+        now - startMenuTime <= kStartMenuSearchPaneTtlMs &&
+        startMenuMonitor && GetMonitorInfoW(startMenuMonitor, &monitorInfo)) {
+      return startMenuMonitor;
+    }
   }
 
   constexpr DWORD kInvocationMessageTtlMs = 2500;

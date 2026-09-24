@@ -193,3 +193,8 @@
   $name: Move tray icon menus with Taskbar
   $description: When enabled, the right-click menus of the clock and the system tray icons (network, volume, battery, language) open at the right end of the taskbar, lined up with the Notification Center, instead of at the right edge of the screen. Default is on.
   $type: bool
+
+- StartMenuOnActiveMonitor: true
+  $name: Open Start on the monitor in use
+  $description: When enabled, the Start menu opened with the Win key (or Ctrl+Esc) opens on the monitor of the window you are working in, or the one under the mouse when the desktop or a taskbar has focus, instead of always on the main display. A taskbar's Start button already opens it on that taskbar's monitor. Only monitors with a taskbar are used. Default is on.
+  $type: bool
