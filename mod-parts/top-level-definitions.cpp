@@ -26,11 +26,10 @@ struct TaskbarState {
   float lastTargetOffsetY{0};
   float initOffsetX{-1};
   bool wasOverflowing{false};
-  // Fork addition: false once ApplyStyle has clipped the taskbar window to the
-  // island (UpdateTaskbarWindowRegion), so turning the clip off clears it once.
-  // lastRegionCorner is the clip's corner radius in DIPs, which the window's
-  // region bounds cannot show a change of.
-  bool lastRegionClear{true};
+  // Fork addition: the bounds of the island clip ApplyStyle last set on the
+  // taskbar window (UpdateTaskbarWindowRegion), empty when none, and its corner
+  // radius in DIPs, which the window's region bounds cannot show a change of.
+  RECT lastRegionBox{};
   float lastRegionCorner{-1.0f};
   uintptr_t lastOverflowButtonIdentity{0};
   bool overflowButtonSuppressionKnown{false};
@@ -84,6 +83,9 @@ struct TaskbarState {
   uint64_t lastDimensionInvalidationGeneration{0};
   TaskbarChildStyleCache taskbarChildStyleCache;
   TaskbarChildStyleCache trayChildStyleCache;
+  // Fork addition: COM identity of the taskbar XAML this state was built for.
+  // See GetOrCreateTaskbarState.
+  uintptr_t xamlRootIdentity{0};
 };
 
 struct TaskbarFlyoutStateSnapshot {
@@ -216,7 +218,45 @@ void RecordTaskbarInvocationMonitorTai(HWND taskbarWindow, UINT message) {
                                       std::memory_order_release);
 }
 
+// Fork addition: the monitor a flyout window is laid out on, when all but a
+// sliver of it sits on one monitor.
+static HMONITOR GetFlyoutLayoutMonitorTai(HWND flyoutWindow) {
+  RECT windowRect{};
+  if (!flyoutWindow || !GetWindowRect(flyoutWindow, &windowRect)) {
+    return nullptr;
+  }
+  HMONITOR monitor = MonitorFromRect(&windowRect, MONITOR_DEFAULTTONULL);
+  MONITORINFO monitorInfo{.cbSize = sizeof(MONITORINFO)};
+  RECT overlap{};
+  if (!monitor || !GetMonitorInfoW(monitor, &monitorInfo) ||
+      !IntersectRect(&overlap, &windowRect, &monitorInfo.rcMonitor)) {
+    return nullptr;
+  }
+  const long long windowArea =
+      static_cast<long long>(windowRect.right - windowRect.left) *
+      (windowRect.bottom - windowRect.top);
+  const long long overlapArea =
+      static_cast<long long>(overlap.right - overlap.left) *
+      (overlap.bottom - overlap.top);
+  if (windowArea <= 0 || overlapArea * 10 < windowArea * 9) {
+    return nullptr;
+  }
+  return monitor;
+}
+
 HMONITOR ResolveFlyoutMonitorTai(HWND flyoutWindow) {
+  // Fork addition: Windows lays a flyout's window out on the monitor it opens
+  // it on before revealing it; the Start menu's spans that monitor's width
+  // above the taskbar. The guesses below take the monitor of a taskbar under
+  // the cursor, right for a click but not for the Win key (or Win+S) pressed
+  // with the cursor resting over another monitor's taskbar: the Start menu
+  // was moved there still laid out for its own monitor, and drawn part-way
+  // across the other. So the window's own monitor comes first, and the
+  // guesses are left for a window not yet on any one monitor.
+  if (HMONITOR monitor = GetFlyoutLayoutMonitorTai(flyoutWindow)) {
+    return monitor;
+  }
+
   constexpr DWORD kInvocationMessageTtlMs = 2500;
   const DWORD messageTime = static_cast<DWORD>(GetMessageTime());
   if (messageTime &&
@@ -246,11 +286,21 @@ HMONITOR ResolveFlyoutMonitorTai(HWND flyoutWindow) {
              : nullptr;
 }
 
-std::shared_ptr<TaskbarState> GetOrCreateTaskbarState(const std::wstring& monitorName) {
+// Fork addition: xamlRootIdentity is the COM identity of the taskbar XAML being
+// styled. States are filed by monitor name, but the taskbar behind a name can
+// change: a monitor plugged back in gets a new taskbar, often under its old
+// name, and moving the primary display moves the primary taskbar onto another
+// monitor's name. Its state held the old taskbar's animation targets, and
+// with the same size and scale, nothing marked them stale, so the new
+// taskbar's island could be left where Windows put it. A taskbar the state was
+// not built for gets a fresh one.
+std::shared_ptr<TaskbarState> GetOrCreateTaskbarState(const std::wstring& monitorName,
+                                                      uintptr_t xamlRootIdentity) {
   std::lock_guard<std::mutex> lock(g_taskbarStatesMutex);
   auto& state = g_taskbarStates[monitorName];
-  if (!state) {
+  if (!state || state->xamlRootIdentity != xamlRootIdentity) {
     state = std::make_shared<TaskbarState>();
+    state->xamlRootIdentity = xamlRootIdentity;
   }
   return state;
 }
@@ -418,6 +468,7 @@ static FILE* OpenPopupLogFileTai() {
   return f;
 }
 
+// windowsRect is where Windows had the window before the mod moved it.
 void LogFlyoutPlacementToFileTai(PCWSTR stage,
                                  PCWSTR monitorName,
                                  int target,
@@ -425,6 +476,7 @@ void LogFlyoutPlacementToFileTai(PCWSTR stage,
                                  UINT monitorDpiY,
                                  UINT windowDpiX,
                                  UINT windowDpiY,
+                                 RECT const& windowsRect,
                                  int x,
                                  int y,
                                  int cx,
@@ -443,12 +495,16 @@ void LogFlyoutPlacementToFileTai(PCWSTR stage,
   fwprintf(f,
            L"%02d:%02d:%02d.%03d %s monitor=%s target=%d "
            L"monitorDpi=%ux%u windowDpi=%ux%u "
+           L"windows=(x=%ld,y=%ld,cx=%ld,cy=%ld) "
            L"setPos=(x=%d,y=%d,cx=%d,cy=%d) cursor=(%ld,%ld) "
            L"tbState{startBtnX=%.2f rootW=%.2f targetW=%.2f}\n",
            st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, stage,
            monitorName, target, monitorDpiX, monitorDpiY, windowDpiX,
-           windowDpiY, x, y, cx, cy, cursorPos.x, cursorPos.y,
-           lastStartButtonXCalculated, lastRootWidth, lastTargetWidth);
+           windowDpiY, windowsRect.left, windowsRect.top,
+           windowsRect.right - windowsRect.left,
+           windowsRect.bottom - windowsRect.top, x, y, cx, cy, cursorPos.x,
+           cursorPos.y, lastStartButtonXCalculated, lastRootWidth,
+           lastTargetWidth);
   fclose(f);
 }
 

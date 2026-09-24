@@ -29,8 +29,8 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    `SetWindowRgn` so the OS only routes mouse input to pixels inside the
 >    island. The clip is driven by the post-scale island bounds, so it tracks
 >    the island when upstream shrinks it on overflow. While an auto-hidden
->    taskbar is off screen the region is left to Windows, which clips it
->    itself, and it is put back once Windows clears it. Also proposed upstream as
+>    taskbar is off screen the clip is lifted, so anywhere along the screen
+>    edge brings it back, and it is put back when the taskbar is. Also proposed upstream as
 >    [PR #19](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/pull/19).
 >
 > 2. **`NotificationCenterPrimaryOnly` setting.**
@@ -81,11 +81,15 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    taskbar parked over the monitor below it was styled and clipped as that
 >    monitor's taskbar, cutting the island off
 >    ([upstream issue #32](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issues/32)).
->    The taskbar lookup no longer crashes Explorer when a display change
->    catches a taskbar before its frame exists. And a secondary taskbar that
->    Windows sets up while the primary one is auto-hidden, which Windows
->    leaves invisible (`TaskbarHost::Start_System` takes the primary
->    taskbar's state), is shown.
+>    A monitor plugged back in, or taking over as the main display, starts
+>    from fresh taskbar state instead of the previous taskbar's. The taskbar
+>    lookup no longer crashes Explorer when a display change catches a
+>    taskbar before its frame exists. A secondary taskbar that Windows sets
+>    up while the primary one is auto-hidden, which Windows leaves invisible
+>    (`TaskbarHost::Start_System` takes the primary taskbar's state), is
+>    shown. And the Start menu opened with the Win key stays on the monitor
+>    Windows opens it on, instead of being moved, still laid out for that
+>    monitor, to the one whose taskbar the cursor is over.
 >
 > Everything else — the island auto-scaling, the WindhawkBlur engine, flyout
 > monitor resolution, the Y-above-taskbar clamp and Notification-Center

@@ -3213,18 +3213,32 @@ static HWND FindTaskbarWindowForMonitorTai(std::wstring const& monitorName) {
   return context.window;
 }
 
-// force re-applies a region the window already has the bounds of, for when
-// only its corner radius changed. Returns false when the window was left
-// alone because it is not on its monitor.
+// regionBox holds the bounds of the region this function last set, which is
+// how a region of Windows' is told apart from the mod's. force re-applies a
+// region the window already has the bounds of, for when only its corner
+// radius changed. Returns false when the window is not on its monitor.
 bool UpdateTaskbarWindowRegion(HWND taskbarWindow,
                                float visibleXDip,
                                float visibleWidthDip,
                                float cornerRadiusDip,
                                float rasterizationScale,
-                               bool force) {
+                               bool force,
+                               RECT* regionBox) {
   RECT wnd{};
-  if (!taskbarWindow || !GetWindowRect(taskbarWindow, &wnd) ||
-      !IsTaskbarWindowOnItsMonitorTai(taskbarWindow, wnd)) {
+  if (!taskbarWindow || !GetWindowRect(taskbarWindow, &wnd)) {
+    return false;
+  }
+  RECT current{};
+  const int currentType = GetWindowRgnBox(taskbarWindow, &current);
+  const bool hasRegion =
+      currentType == SIMPLEREGION || currentType == COMPLEXREGION;
+  const bool hasOwnRegion = hasRegion && EqualRect(&current, regionBox);
+  if (!IsTaskbarWindowOnItsMonitorTai(taskbarWindow, wnd)) {
+    // Auto-hidden, or sliding in or out. The clip goes, so that anywhere
+    // along the screen edge brings the taskbar back, as without the mod.
+    if (hasOwnRegion) {
+      SetWindowRgn(taskbarWindow, nullptr, TRUE);
+    }
     return false;
   }
   const int wndW = wnd.right - wnd.left;
@@ -3238,10 +3252,6 @@ bool UpdateTaskbarWindowRegion(HWND taskbarWindow,
       std::lround((visibleXDip + visibleWidthDip) * scale));
   if (x1 < 0) x1 = 0;
   if (x2 > wndW) x2 = wndW;
-  RECT current{};
-  const int currentType = GetWindowRgnBox(taskbarWindow, &current);
-  const bool hasRegion =
-      currentType == SIMPLEREGION || currentType == COMPLEXREGION;
   if (x2 - x1 < 10) {
     // Too small to be useful; fall back to the full window rather than
     // risk making the taskbar unclickable.
@@ -3250,9 +3260,8 @@ bool UpdateTaskbarWindowRegion(HWND taskbarWindow,
     }
     return true;
   }
-  // Both region shapes below report this bounding box.
-  if (!force && hasRegion && std::abs(current.left - x1) <= 1 &&
-      std::abs(current.right - x2) <= 1 && current.top == 0 &&
+  if (!force && hasOwnRegion && std::abs(current.left - x1) <= 1 &&
+      std::abs(current.right - x2) <= 1 &&
       std::abs(current.bottom - wndH) <= 1) {
     return true;
   }
@@ -3265,6 +3274,9 @@ bool UpdateTaskbarWindowRegion(HWND taskbarWindow,
                        : CreateRectRgn(x1, 0, x2, wndH);
   // SetWindowRgn takes ownership of hRgn; do not DeleteObject after.
   SetWindowRgn(taskbarWindow, hRgn, TRUE);
+  if (GetWindowRgnBox(taskbarWindow, regionBox) == ERROR) {
+    SetRectEmpty(regionBox);
+  }
   return true;
 }
 
@@ -4179,7 +4191,9 @@ bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorNam
   }
   try {
   std::lock_guard<std::recursive_mutex> settingsLock(g_settingsMutex);
-  auto stateHandle = GetOrCreateTaskbarState(monitorName);
+  auto stateHandle = GetOrCreateTaskbarState(
+      monitorName,
+      reinterpret_cast<uintptr_t>(GetComIdentityTai(xamlRootContent)));
   if (!stateHandle) {
     Wh_Log(L"Failed to get taskbar state for monitor: %s", monitorName.c_str());
     return false;
@@ -4687,10 +4701,13 @@ bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorNam
     const bool clearRegion =
         g_unloading || g_settings.userDefinedFullWidthTaskbarBackground;
     if (clearRegion) {
-      if (!state.lastRegionClear && taskbarWindow) {
+      RECT current{};
+      if (taskbarWindow &&
+          GetWindowRgnBox(taskbarWindow, &current) >= SIMPLEREGION &&
+          EqualRect(&current, &state.lastRegionBox)) {
         SetWindowRgn(taskbarWindow, nullptr, TRUE);
       }
-      state.lastRegionClear = true;
+      SetRectEmpty(&state.lastRegionBox);
     } else {
       const float regionCorner =
           g_settings.userDefinedTaskbarCornerRadius * targetTaskbarIslandScale;
@@ -4699,8 +4716,8 @@ bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorNam
       if (UpdateTaskbarWindowRegion(
               taskbarWindow, scaledBackgroundLeftScreen,
               scaledBackgroundRightScreen - scaledBackgroundLeftScreen,
-              regionCorner, rasterizationScale, regionCornerChanged)) {
-        state.lastRegionClear = false;
+              regionCorner, rasterizationScale, regionCornerChanged,
+              &state.lastRegionBox)) {
         state.lastRegionCorner = regionCorner;
       }
     }
