@@ -397,13 +397,25 @@ XamlRoot XamlRootFromTaskbarHostSharedPtr(void* taskbarHostSharedPtr[2]) {
 #else
 #error "Unsupported architecture"
 #endif
+    if (!taskbarHostSharedPtr[0]) {
+        std__Ref_count_base__Decref_Original(taskbarHostSharedPtr[1]);
+        return nullptr;
+    }
     auto* taskbarElementIUnknown =
         *(IUnknown**)((BYTE*)taskbarHostSharedPtr[0] +
                       taskbarElementIUnknownOffset);
+    if (!taskbarElementIUnknown) {
+        std__Ref_count_base__Decref_Original(taskbarHostSharedPtr[1]);
+        return nullptr;
+    }
     FrameworkElement taskbarElement = nullptr;
     taskbarElementIUnknown->QueryInterface(winrt::guid_of<FrameworkElement>(),
                                            winrt::put_abi(taskbarElement));
-    auto result = taskbarElement ? taskbarElement.XamlRoot() : nullptr;
+    XamlRoot result = nullptr;
+    try {
+        result = taskbarElement ? taskbarElement.XamlRoot() : nullptr;
+    } catch (...) {
+    }
     std__Ref_count_base__Decref_Original(taskbarHostSharedPtr[1]);
     return result;
 }
@@ -413,6 +425,9 @@ XamlRoot GetTaskbarXamlRoot(HWND hTaskbarWnd) {
         return nullptr;
     }
     void* taskBand = (void*)GetWindowLongPtr(hTaskSwWnd, 0);
+    if (!taskBand) {
+        return nullptr;
+    }
     void* taskBandForTaskListWndSite = taskBand;
     for (int i = 0; *(void**)taskBandForTaskListWndSite !=
                     CTaskBand_ITaskListWndSite_vftable;
@@ -434,6 +449,9 @@ XamlRoot GetSecondaryTaskbarXamlRoot(HWND hSecondaryTaskbarWnd) {
         return nullptr;
     }
     void* taskBand = (void*)GetWindowLongPtr(hTaskSwWnd, 0);
+    if (!taskBand) {
+        return nullptr;
+    }
     void* taskBandForTaskListWndSite = taskBand;
     for (int i = 0; *(void**)taskBandForTaskListWndSite !=
                     CSecondaryTaskBand_ITaskListWndSite_vftable;
@@ -511,7 +529,11 @@ void ApplySettingsFromTaskbarThread() {
                 Wh_Log(L"Getting XamlRoot failed");
                 return TRUE;
             }
-            const auto xamlRootContent = xamlRoot.Content().try_as<FrameworkElement>();
+            // Fork addition: this runs inside an EnumThreadWindows callback, where an
+// escaping exception takes Explorer down, and XAML calls throw while a taskbar
+// is being torn down in a display change.
+try {
+const auto xamlRootContent = xamlRoot.Content().try_as<FrameworkElement>();
 if (!xamlRootContent) {
     Wh_Log(L"XamlRoot content is null");
     return TRUE;
@@ -521,11 +543,24 @@ if (!dispatcher) {
     Wh_Log(L"XamlRoot content dispatcher is null");
     return TRUE;
 }
-std::wstring monitorName = GetMonitorName(hWnd);
-auto applyOnDispatcher = [xamlRootContent, monitorName]() {
+// Fork addition: see GetTaskbarMonitorTai.
+std::wstring monitorName = GetMonitorName(GetTaskbarMonitorTai(hWnd));
+// Fork addition: in the middle of a display change Windows can report the
+// "WinDisc" placeholder display, which is never drawn on. Styling a taskbar
+// against it would only file its state under that name.
+if (_wcsicmp(monitorName.c_str(), L"WinDisc") == 0) {
+    Wh_Log(L"Skipping taskbar on the WinDisc placeholder display");
+    return TRUE;
+}
+// Fork addition: see RepairSecondaryTaskbarIslandTai.
+RepairSecondaryTaskbarIslandTai(hWnd, monitorName);
+auto applyOnDispatcher = [xamlRootContent, monitorName, hWnd]() {
+    // Fork addition: see g_applyStyleTaskbarWindowTai.
+    g_applyStyleTaskbarWindowTai = hWnd;
     if (!ApplyStyle(xamlRootContent, monitorName)) {
         Wh_Log(L"ApplyStyles failed");
     }
+    g_applyStyleTaskbarWindowTai = nullptr;
 };
 if (dispatcher.HasThreadAccess()) {
     applyOnDispatcher();
@@ -540,6 +575,9 @@ if (dispatcher.HasThreadAccess()) {
         }
     }
     dispatcher.TryRunAsync(priority, applyOnDispatcher);
+}
+} catch (...) {
+    Wh_Log(L"Styling a taskbar failed: %08X", winrt::to_hresult());
 }
             return TRUE;
         },
