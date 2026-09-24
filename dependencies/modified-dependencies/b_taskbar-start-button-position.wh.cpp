@@ -1496,7 +1496,7 @@ Wh_Log(L"Recalc: monitor=%s taskbarState.lastLeftMostEdgeTray: %f, lastStartButt
 // treats backslash escapes in the replacement string.
 LogFlyoutPlacementToFileTai(L"Recalc", monitorName.c_str(), static_cast<int>(target),
                             monitorDpiX, monitorDpiY, windowDpiX, windowDpiY,
-                            x, y, cx, cy,
+                            targetRect, x, y, cx, cy,
                             taskbarState.lastStartButtonXCalculated,
                             taskbarState.lastRootWidth,
                             taskbarState.lastTargetWidth);

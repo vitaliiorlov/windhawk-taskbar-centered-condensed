@@ -2,7 +2,7 @@
 // @id              taskbar-dock-like
 // @name            TAI (taskbar as island) for Windows 11 - vo fork
 // @description     Centers and floats the taskbar, moves the system tray next to the task area, and serves as an all-in-one, one-click mod to transform the taskbar into an animated dock. Fork additions: the clickable taskbar area is clipped to the visible island, and the Notification Center can be limited to the primary monitor.
-// @version         1.5.263-vo
+// @version         1.5.264-vo
 // @author          vitaliiorlov (fork of DarkionAvey)
 // @github          https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed
 // @include         explorer.exe
@@ -41,8 +41,8 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    `SetWindowRgn` so the OS only routes mouse input to pixels inside the
 >    island. The clip is driven by the post-scale island bounds, so it tracks
 >    the island when upstream shrinks it on overflow. While an auto-hidden
->    taskbar is off screen the region is left to Windows, which clips it
->    itself, and it is put back once Windows clears it. Also proposed upstream as
+>    taskbar is off screen the clip is lifted, so anywhere along the screen
+>    edge brings it back, and it is put back when the taskbar is. Also proposed upstream as
 >    [PR #19](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/pull/19).
 >
 > 2. **`NotificationCenterPrimaryOnly` setting.**
@@ -93,11 +93,15 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    taskbar parked over the monitor below it was styled and clipped as that
 >    monitor's taskbar, cutting the island off
 >    ([upstream issue #32](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issues/32)).
->    The taskbar lookup no longer crashes Explorer when a display change
->    catches a taskbar before its frame exists. And a secondary taskbar that
->    Windows sets up while the primary one is auto-hidden, which Windows
->    leaves invisible (`TaskbarHost::Start_System` takes the primary
->    taskbar's state), is shown.
+>    A monitor plugged back in, or taking over as the main display, starts
+>    from fresh taskbar state instead of the previous taskbar's. The taskbar
+>    lookup no longer crashes Explorer when a display change catches a
+>    taskbar before its frame exists. A secondary taskbar that Windows sets
+>    up while the primary one is auto-hidden, which Windows leaves invisible
+>    (`TaskbarHost::Start_System` takes the primary taskbar's state), is
+>    shown. And the Start menu opened with the Win key stays on the monitor
+>    Windows opens it on, instead of being moved, still laid out for that
+>    monitor, to the one whose taskbar the cursor is over.
 >
 > Everything else — the island auto-scaling, the WindhawkBlur engine, flyout
 > monitor resolution, the Y-above-taskbar clamp and Notification-Center
@@ -519,11 +523,10 @@ struct TaskbarState {
   float lastTargetOffsetY{0};
   float initOffsetX{-1};
   bool wasOverflowing{false};
-  // Fork addition: false once ApplyStyle has clipped the taskbar window to the
-  // island (UpdateTaskbarWindowRegion), so turning the clip off clears it once.
-  // lastRegionCorner is the clip's corner radius in DIPs, which the window's
-  // region bounds cannot show a change of.
-  bool lastRegionClear{true};
+  // Fork addition: the bounds of the island clip ApplyStyle last set on the
+  // taskbar window (UpdateTaskbarWindowRegion), empty when none, and its corner
+  // radius in DIPs, which the window's region bounds cannot show a change of.
+  RECT lastRegionBox{};
   float lastRegionCorner{-1.0f};
   uintptr_t lastOverflowButtonIdentity{0};
   bool overflowButtonSuppressionKnown{false};
@@ -577,6 +580,9 @@ struct TaskbarState {
   uint64_t lastDimensionInvalidationGeneration{0};
   TaskbarChildStyleCache taskbarChildStyleCache;
   TaskbarChildStyleCache trayChildStyleCache;
+  // Fork addition: COM identity of the taskbar XAML this state was built for.
+  // See GetOrCreateTaskbarState.
+  uintptr_t xamlRootIdentity{0};
 };
 struct TaskbarFlyoutStateSnapshot {
   float lastStartButtonXCalculated{0.0f};
@@ -691,7 +697,43 @@ void RecordTaskbarInvocationMonitorTai(HWND taskbarWindow, UINT message) {
   g_recentTaskbarInvocationTime.store(GetTickCount64(),
                                       std::memory_order_release);
 }
+// Fork addition: the monitor a flyout window is laid out on, when all but a
+// sliver of it sits on one monitor.
+static HMONITOR GetFlyoutLayoutMonitorTai(HWND flyoutWindow) {
+  RECT windowRect{};
+  if (!flyoutWindow || !GetWindowRect(flyoutWindow, &windowRect)) {
+    return nullptr;
+  }
+  HMONITOR monitor = MonitorFromRect(&windowRect, MONITOR_DEFAULTTONULL);
+  MONITORINFO monitorInfo{.cbSize = sizeof(MONITORINFO)};
+  RECT overlap{};
+  if (!monitor || !GetMonitorInfoW(monitor, &monitorInfo) ||
+      !IntersectRect(&overlap, &windowRect, &monitorInfo.rcMonitor)) {
+    return nullptr;
+  }
+  const long long windowArea =
+      static_cast<long long>(windowRect.right - windowRect.left) *
+      (windowRect.bottom - windowRect.top);
+  const long long overlapArea =
+      static_cast<long long>(overlap.right - overlap.left) *
+      (overlap.bottom - overlap.top);
+  if (windowArea <= 0 || overlapArea * 10 < windowArea * 9) {
+    return nullptr;
+  }
+  return monitor;
+}
 HMONITOR ResolveFlyoutMonitorTai(HWND flyoutWindow) {
+  // Fork addition: Windows lays a flyout's window out on the monitor it opens
+  // it on before revealing it; the Start menu's spans that monitor's width
+  // above the taskbar. The guesses below take the monitor of a taskbar under
+  // the cursor, right for a click but not for the Win key (or Win+S) pressed
+  // with the cursor resting over another monitor's taskbar: the Start menu
+  // was moved there still laid out for its own monitor, and drawn part-way
+  // across the other. So the window's own monitor comes first, and the
+  // guesses are left for a window not yet on any one monitor.
+  if (HMONITOR monitor = GetFlyoutLayoutMonitorTai(flyoutWindow)) {
+    return monitor;
+  }
   constexpr DWORD kInvocationMessageTtlMs = 2500;
   const DWORD messageTime = static_cast<DWORD>(GetMessageTime());
   if (messageTime &&
@@ -718,11 +760,21 @@ HMONITOR ResolveFlyoutMonitorTai(HWND flyoutWindow) {
              ? MonitorFromWindow(flyoutWindow, MONITOR_DEFAULTTONEAREST)
              : nullptr;
 }
-std::shared_ptr<TaskbarState> GetOrCreateTaskbarState(const std::wstring& monitorName) {
+// Fork addition: xamlRootIdentity is the COM identity of the taskbar XAML being
+// styled. States are filed by monitor name, but the taskbar behind a name can
+// change: a monitor plugged back in gets a new taskbar, often under its old
+// name, and moving the primary display moves the primary taskbar onto another
+// monitor's name. Its state held the old taskbar's animation targets, and
+// with the same size and scale, nothing marked them stale, so the new
+// taskbar's island could be left where Windows put it. A taskbar the state was
+// not built for gets a fresh one.
+std::shared_ptr<TaskbarState> GetOrCreateTaskbarState(const std::wstring& monitorName,
+                                                      uintptr_t xamlRootIdentity) {
   std::lock_guard<std::mutex> lock(g_taskbarStatesMutex);
   auto& state = g_taskbarStates[monitorName];
-  if (!state) {
+  if (!state || state->xamlRootIdentity != xamlRootIdentity) {
     state = std::make_shared<TaskbarState>();
+    state->xamlRootIdentity = xamlRootIdentity;
   }
   return state;
 }
@@ -875,6 +927,7 @@ static FILE* OpenPopupLogFileTai() {
   }
   return f;
 }
+// windowsRect is where Windows had the window before the mod moved it.
 void LogFlyoutPlacementToFileTai(PCWSTR stage,
                                  PCWSTR monitorName,
                                  int target,
@@ -882,6 +935,7 @@ void LogFlyoutPlacementToFileTai(PCWSTR stage,
                                  UINT monitorDpiY,
                                  UINT windowDpiX,
                                  UINT windowDpiY,
+                                 RECT const& windowsRect,
                                  int x,
                                  int y,
                                  int cx,
@@ -900,12 +954,16 @@ void LogFlyoutPlacementToFileTai(PCWSTR stage,
   fwprintf(f,
            L"%02d:%02d:%02d.%03d %s monitor=%s target=%d "
            L"monitorDpi=%ux%u windowDpi=%ux%u "
+           L"windows=(x=%ld,y=%ld,cx=%ld,cy=%ld) "
            L"setPos=(x=%d,y=%d,cx=%d,cy=%d) cursor=(%ld,%ld) "
            L"tbState{startBtnX=%.2f rootW=%.2f targetW=%.2f}\n",
            st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, stage,
            monitorName, target, monitorDpiX, monitorDpiY, windowDpiX,
-           windowDpiY, x, y, cx, cy, cursorPos.x, cursorPos.y,
-           lastStartButtonXCalculated, lastRootWidth, lastTargetWidth);
+           windowDpiY, windowsRect.left, windowsRect.top,
+           windowsRect.right - windowsRect.left,
+           windowsRect.bottom - windowsRect.top, x, y, cx, cy, cursorPos.x,
+           cursorPos.y, lastStartButtonXCalculated, lastRootWidth,
+           lastTargetWidth);
   fclose(f);
 }
 // Fork addition: the keyboard layout (input switcher) flyout is placed by
@@ -5184,7 +5242,7 @@ Wh_Log(L"Recalc: monitor=%s taskbarState.lastLeftMostEdgeTray: %f, lastStartButt
 // treats backslash escapes in the replacement string.
 LogFlyoutPlacementToFileTai(L"Recalc", monitorName.c_str(), static_cast<int>(target),
                             monitorDpiX, monitorDpiY, windowDpiX, windowDpiY,
-                            x, y, cx, cy,
+                            targetRect, x, y, cx, cy,
                             taskbarState.lastStartButtonXCalculated,
                             taskbarState.lastRootWidth,
                             taskbarState.lastTargetWidth);
@@ -9117,18 +9175,32 @@ static HWND FindTaskbarWindowForMonitorTai(std::wstring const& monitorName) {
       reinterpret_cast<LPARAM>(&context));
   return context.window;
 }
-// force re-applies a region the window already has the bounds of, for when
-// only its corner radius changed. Returns false when the window was left
-// alone because it is not on its monitor.
+// regionBox holds the bounds of the region this function last set, which is
+// how a region of Windows' is told apart from the mod's. force re-applies a
+// region the window already has the bounds of, for when only its corner
+// radius changed. Returns false when the window is not on its monitor.
 bool UpdateTaskbarWindowRegion(HWND taskbarWindow,
                                float visibleXDip,
                                float visibleWidthDip,
                                float cornerRadiusDip,
                                float rasterizationScale,
-                               bool force) {
+                               bool force,
+                               RECT* regionBox) {
   RECT wnd{};
-  if (!taskbarWindow || !GetWindowRect(taskbarWindow, &wnd) ||
-      !IsTaskbarWindowOnItsMonitorTai(taskbarWindow, wnd)) {
+  if (!taskbarWindow || !GetWindowRect(taskbarWindow, &wnd)) {
+    return false;
+  }
+  RECT current{};
+  const int currentType = GetWindowRgnBox(taskbarWindow, &current);
+  const bool hasRegion =
+      currentType == SIMPLEREGION || currentType == COMPLEXREGION;
+  const bool hasOwnRegion = hasRegion && EqualRect(&current, regionBox);
+  if (!IsTaskbarWindowOnItsMonitorTai(taskbarWindow, wnd)) {
+    // Auto-hidden, or sliding in or out. The clip goes, so that anywhere
+    // along the screen edge brings the taskbar back, as without the mod.
+    if (hasOwnRegion) {
+      SetWindowRgn(taskbarWindow, nullptr, TRUE);
+    }
     return false;
   }
   const int wndW = wnd.right - wnd.left;
@@ -9142,10 +9214,6 @@ bool UpdateTaskbarWindowRegion(HWND taskbarWindow,
       std::lround((visibleXDip + visibleWidthDip) * scale));
   if (x1 < 0) x1 = 0;
   if (x2 > wndW) x2 = wndW;
-  RECT current{};
-  const int currentType = GetWindowRgnBox(taskbarWindow, &current);
-  const bool hasRegion =
-      currentType == SIMPLEREGION || currentType == COMPLEXREGION;
   if (x2 - x1 < 10) {
     // Too small to be useful; fall back to the full window rather than
     // risk making the taskbar unclickable.
@@ -9154,9 +9222,8 @@ bool UpdateTaskbarWindowRegion(HWND taskbarWindow,
     }
     return true;
   }
-  // Both region shapes below report this bounding box.
-  if (!force && hasRegion && std::abs(current.left - x1) <= 1 &&
-      std::abs(current.right - x2) <= 1 && current.top == 0 &&
+  if (!force && hasOwnRegion && std::abs(current.left - x1) <= 1 &&
+      std::abs(current.right - x2) <= 1 &&
       std::abs(current.bottom - wndH) <= 1) {
     return true;
   }
@@ -9169,6 +9236,9 @@ bool UpdateTaskbarWindowRegion(HWND taskbarWindow,
                        : CreateRectRgn(x1, 0, x2, wndH);
   // SetWindowRgn takes ownership of hRgn; do not DeleteObject after.
   SetWindowRgn(taskbarWindow, hRgn, TRUE);
+  if (GetWindowRgnBox(taskbarWindow, regionBox) == ERROR) {
+    SetRectEmpty(regionBox);
+  }
   return true;
 }
 // Fork addition: a secondary taskbar could sit on screen with its XAML island
@@ -10046,7 +10116,9 @@ bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorNam
   }
   try {
   std::lock_guard<std::recursive_mutex> settingsLock(g_settingsMutex);
-  auto stateHandle = GetOrCreateTaskbarState(monitorName);
+  auto stateHandle = GetOrCreateTaskbarState(
+      monitorName,
+      reinterpret_cast<uintptr_t>(GetComIdentityTai(xamlRootContent)));
   if (!stateHandle) {
     Wh_Log(L"Failed to get taskbar state for monitor: %s", monitorName.c_str());
     return false;
@@ -10554,10 +10626,13 @@ bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorNam
     const bool clearRegion =
         g_unloading || g_settings.userDefinedFullWidthTaskbarBackground;
     if (clearRegion) {
-      if (!state.lastRegionClear && taskbarWindow) {
+      RECT current{};
+      if (taskbarWindow &&
+          GetWindowRgnBox(taskbarWindow, &current) >= SIMPLEREGION &&
+          EqualRect(&current, &state.lastRegionBox)) {
         SetWindowRgn(taskbarWindow, nullptr, TRUE);
       }
-      state.lastRegionClear = true;
+      SetRectEmpty(&state.lastRegionBox);
     } else {
       const float regionCorner =
           g_settings.userDefinedTaskbarCornerRadius * targetTaskbarIslandScale;
@@ -10566,8 +10641,8 @@ bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorNam
       if (UpdateTaskbarWindowRegion(
               taskbarWindow, scaledBackgroundLeftScreen,
               scaledBackgroundRightScreen - scaledBackgroundLeftScreen,
-              regionCorner, rasterizationScale, regionCornerChanged)) {
-        state.lastRegionClear = false;
+              regionCorner, rasterizationScale, regionCornerChanged,
+              &state.lastRegionBox)) {
         state.lastRegionCorner = regionCorner;
       }
     }
