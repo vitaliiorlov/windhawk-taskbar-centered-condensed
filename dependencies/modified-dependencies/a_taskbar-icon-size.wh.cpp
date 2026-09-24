@@ -524,6 +524,20 @@ bool TryCalculateFlyoutYAboveTaskbar(const MONITORINFO& monitorInfo,
 // and mixed-DPI issues can be diagnosed without DebugView attached. One line is
 // appended per flyout open to %TEMP%\windhawk_popup_log.txt. Failures are
 // silent by design -- diagnostics must never affect placement behaviour.
+static FILE* OpenPopupLogFileTai() {
+  WCHAR logPath[MAX_PATH];
+  if (!GetEnvironmentVariableW(L"TEMP", logPath, MAX_PATH)) {
+    return nullptr;
+  }
+  if (wcscat_s(logPath, MAX_PATH, L"\\windhawk_popup_log.txt") != 0) {
+    return nullptr;
+  }
+  FILE* f = nullptr;
+  if (_wfopen_s(&f, logPath, L"a, ccs=UTF-8") != 0) {
+    return nullptr;
+  }
+  return f;
+}
 void LogFlyoutPlacementToFileTai(PCWSTR stage,
                                  PCWSTR monitorName,
                                  int target,
@@ -538,15 +552,8 @@ void LogFlyoutPlacementToFileTai(PCWSTR stage,
                                  float lastStartButtonXCalculated,
                                  float lastRootWidth,
                                  float lastTargetWidth) {
-  WCHAR logPath[MAX_PATH];
-  if (!GetEnvironmentVariableW(L"TEMP", logPath, MAX_PATH)) {
-    return;
-  }
-  if (wcscat_s(logPath, MAX_PATH, L"\\windhawk_popup_log.txt") != 0) {
-    return;
-  }
-  FILE* f = nullptr;
-  if (_wfopen_s(&f, logPath, L"a, ccs=UTF-8") != 0 || !f) {
+  FILE* f = OpenPopupLogFileTai();
+  if (!f) {
     return;
   }
   SYSTEMTIME st{};
@@ -562,6 +569,36 @@ void LogFlyoutPlacementToFileTai(PCWSTR stage,
            monitorName, target, monitorDpiX, monitorDpiY, windowDpiX,
            windowDpiY, x, y, cx, cy, cursorPos.x, cursorPos.y,
            lastStartButtonXCalculated, lastRootWidth, lastTargetWidth);
+  fclose(f);
+}
+// Fork addition: the keyboard layout (input switcher) flyout is placed by
+// SetWindowPos_Hook rather than the DWM-cloak path above, so it gets its own
+// line. anchor is "language" (the indicator) or "tray" (the island's tray, on
+// taskbars without an indicator); originalX is where Windows put the flyout.
+void LogInputSwitchPlacementToFileTai(PCWSTR monitorName,
+                                      PCWSTR anchor,
+                                      float anchorCenterXDip,
+                                      UINT monitorDpi,
+                                      int originalX,
+                                      int x,
+                                      int y,
+                                      int cx,
+                                      int cy) {
+  FILE* f = OpenPopupLogFileTai();
+  if (!f) {
+    return;
+  }
+  SYSTEMTIME st{};
+  GetLocalTime(&st);
+  POINT cursorPos{};
+  GetCursorPos(&cursorPos);
+  fwprintf(f,
+           L"%02d:%02d:%02d.%03d InputSwitch monitor=%s monitorDpi=%u "
+           L"anchor=%s anchorX=%.2f originalX=%d "
+           L"setPos=(x=%d,y=%d,cx=%d,cy=%d) cursor=(%ld,%ld)\n",
+           st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, monitorName,
+           monitorDpi, anchor, anchorCenterXDip, originalX, x, y, cx, cy,
+           cursorPos.x, cursorPos.y);
   fclose(f);
 }
 std::wstring GetMonitorName(HMONITOR monitor) {
