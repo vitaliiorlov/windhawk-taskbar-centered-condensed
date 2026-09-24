@@ -1356,7 +1356,11 @@ HRESULT WINAPI DwmSetWindowAttribute_Hook(HWND hwnd,
     }  else {
         return original();
     }
-    HMONITOR monitor = ResolveFlyoutMonitorTai(hwnd);
+    HMONITOR monitor = ResolveFlyoutMonitorTai(
+        hwnd, target == DwmTarget::StartMenu    ? FlyoutKindTai::StartMenu
+              : target == DwmTarget::SearchHost ? FlyoutKindTai::Search
+                                                : FlyoutKindTai::NotificationCenter,
+        !cloak);
     UINT monitorDpiX = 96;
     UINT monitorDpiY = 96;
     if (!monitor ||

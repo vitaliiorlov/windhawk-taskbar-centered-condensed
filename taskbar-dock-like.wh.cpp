@@ -1,8 +1,8 @@
 // ==WindhawkMod==
 // @id              taskbar-dock-like
 // @name            TAI (taskbar as island) for Windows 11 - vo fork
-// @description     Centers and floats the taskbar, moves the system tray next to the task area, and serves as an all-in-one, one-click mod to transform the taskbar into an animated dock. Fork additions: the clickable taskbar area is clipped to the visible island, and the Notification Center can be limited to the primary monitor.
-// @version         1.5.264-vo
+// @description     Centers and floats the taskbar, moves the system tray next to the task area, and serves as an all-in-one, one-click mod to transform the taskbar into an animated dock. Fork additions: the clickable taskbar area is clipped to the visible island; the keyboard layout flyout and the tray and Start button right-click menus open at the island; the Win key opens Start on the monitor in use; the Notification Center can be limited to the primary monitor. Fork fixes: the tray lines up with the island on 25H2, the mod loads on the September 2026 update, the Notification Center opens beside the island on the first click, and taskbars on several monitors are kept apart and survive monitors being plugged in and out.
+// @version         1.5.265-vo
 // @author          vitaliiorlov (fork of DarkionAvey)
 // @github          https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed
 // @include         explorer.exe
@@ -30,9 +30,11 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >
 > Upstream: [DarkionAvey/windhawk-taskbar-centered-condensed](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed).
 > This fork ([vitaliiorlov/windhawk-taskbar-centered-condensed](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed))
-> tracks upstream closely and adds seven things on top.
+> tracks upstream closely; everything it adds or fixes on top is listed below.
 >
 > ### What's different from upstream
+>
+> #### Added
 >
 > 1. **The clickable taskbar area matches the visible island.**
 >    Upstream condenses the taskbar visually, but `Shell_TrayWnd` itself stays
@@ -42,7 +44,8 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    island. The clip is driven by the post-scale island bounds, so it tracks
 >    the island when upstream shrinks it on overflow. While an auto-hidden
 >    taskbar is off screen the clip is lifted, so anywhere along the screen
->    edge brings it back, and it is put back when the taskbar is. Also proposed upstream as
+>    edge brings it back, and it is put back when the taskbar is. Also
+>    proposed upstream as
 >    [PR #19](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/pull/19).
 >
 > 2. **`NotificationCenterPrimaryOnly` setting.**
@@ -54,7 +57,9 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 > 3. **Flyout placement is mirrored to a log file.**
 >    One line per flyout open, appended to `windhawk_popup_log.txt` under
 >    `%TEMP%`, so multi-monitor and mixed-DPI placement can be diagnosed
->    without attaching DebugView.
+>    without attaching DebugView. The Start menu, Search and Notification
+>    Center lines show where Windows put the window and where it was moved;
+>    repairs to a taskbar (see 10) are logged there too.
 >
 > 4. **The keyboard layout flyout opens above the language indicator.**
 >    Clicking the language indicator (or pressing Win+Space) opens a flyout
@@ -64,18 +69,7 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    it, clamped to that monitor's work area. Controlled by the
 >    `MoveFlyoutKeyboardLayout` setting (on by default).
 >
-> 5. **The Notification Center opens beside the island from the first click.**
->    Upstream moves the clock and calendar flyout as Explorer reveals it, and
->    recognises it by its window title. On the first open after Explorer
->    starts, the window is revealed before it has a size or that title, so it
->    opened at the right edge of the screen. This fork also shifts the
->    position Explorer computes for the flyout
->    (`CActionCenterExperienceManager::GetViewPosition` in `twinui.pcshell.dll`),
->    so every open lands where upstream's code puts the later ones. Follows
->    the `MoveFlyoutNotificationCenter` and `NotificationCenterPrimaryOnly`
->    settings.
->
-> 6. **The taskbar's right-click menus open at the island.**
+> 5. **The taskbar's right-click menus open at the island.**
 >    Windows anchors the menus of the clock and the system icons (network,
 >    volume, battery, language) to the right edge of the screen and, once
 >    the Start menu is moved to the island, the Start button's to the left
@@ -87,27 +81,70 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    `MoveTrayContextMenus` setting (on by default), the Start button's
 >    follows `MoveFlyoutStartMenu`.
 >
-> 7. **Taskbars on several monitors are kept apart.**
->    Each taskbar is matched to its monitor by the `TaskbarMonitor` property
->    Explorer sets on it, not by where its window happens to be: an auto-hidden
->    taskbar parked over the monitor below it was styled and clipped as that
->    monitor's taskbar, cutting the island off
->    ([upstream issue #32](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issues/32)).
->    A monitor plugged back in, or taking over as the main display, starts
->    from fresh taskbar state instead of the previous taskbar's. The taskbar
->    lookup no longer crashes Explorer when a display change catches a
->    taskbar before its frame exists. A secondary taskbar that Windows sets
->    up while the primary one is auto-hidden, which Windows leaves invisible
->    (`TaskbarHost::Start_System` takes the primary taskbar's state), is
->    shown. And the Start menu opened with the Win key stays on the monitor
->    Windows opens it on, instead of being moved, still laid out for that
->    monitor, to the one whose taskbar the cursor is over.
+> 6. **The Win key opens Start on the monitor in use.**
+>    Windows opens the Start menu on the main display when it is opened with
+>    the Win key (or Ctrl+Esc), whichever monitor is being worked on; only a
+>    taskbar's Start button opens it elsewhere. This fork has Windows open it
+>    on the monitor of the window in focus, or the one under the mouse when
+>    the desktop or a taskbar has focus, the way a Start button click does
+>    (`ImmersiveMonitorHelper::AdjustMonitorConnectedIfNeeded` in
+>    `twinui.pcshell.dll`), so it is laid out there properly. Controlled by
+>    the `StartMenuOnActiveMonitor` setting (on by default).
 >
-> Everything else — the island auto-scaling, the WindhawkBlur engine, flyout
-> monitor resolution, the Y-above-taskbar clamp and Notification-Center
-> detection — is upstream's code, used as-is. Earlier versions of this fork
-> carried their own popup-placement hook; it was dropped in favour of
-> upstream's, which handles the same cases more robustly.
+> #### Fixed
+>
+> 7. **The system tray lines up with the island on Windows 11 25H2.**
+>    On 25H2 the clock, battery, volume and language indicator sat above or
+>    below the app icons by exactly `TaskbarOffsetY`, and came back that way
+>    after every Explorer restart
+>    ([upstream issues #26](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issues/26)
+>    and [#30](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issues/30)).
+>    The tray frame is shorter than the offset-expanded taskbar and relied on
+>    XAML centring it implicitly, which 25H2 stopped doing; the fork pins its
+>    vertical alignment to centre on every pass.
+>
+> 8. **The mod loads on the September 2026 Windows update.**
+>    Build 26100.9549 / 26200.9550 added a parameter to
+>    `CTaskBand::_UpdateItemIcon` in `taskbar.dll`, and the mod, whose hook
+>    only knew the old signature, stopped loading
+>    ([upstream issue #34](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issues/34)).
+>    The hook accepts both signatures and is optional, so a future change
+>    costs one layout trigger rather than the whole mod.
+>
+> 9. **The Notification Center opens beside the island from the first click.**
+>    Upstream moves the clock and calendar flyout as Explorer reveals it, and
+>    recognises it by its window title. On the first open after Explorer
+>    starts, the window is revealed before it has a size or that title, so it
+>    opened at the right edge of the screen. This fork also shifts the
+>    position Explorer computes for the flyout
+>    (`CActionCenterExperienceManager::GetViewPosition` in `twinui.pcshell.dll`),
+>    so every open lands where upstream's code puts the later ones. Follows
+>    the `MoveFlyoutNotificationCenter` and `NotificationCenterPrimaryOnly`
+>    settings.
+>
+> 10. **Taskbars on several monitors are kept apart, and survive display changes.**
+>     Each taskbar is matched to its monitor by the `TaskbarMonitor` property
+>     Explorer sets on it, not by where its window happens to be: an
+>     auto-hidden taskbar parked over the monitor below it was styled and
+>     clipped as that monitor's taskbar, cutting the island off
+>     ([upstream issue #32](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issues/32)).
+>     A monitor plugged back in, or taking over as the main display, starts
+>     from fresh taskbar state instead of the previous taskbar's. The taskbar
+>     lookup no longer crashes Explorer when a display change catches a
+>     taskbar before its frame exists. A secondary taskbar that Windows sets
+>     up while the primary one is auto-hidden, which Windows leaves invisible
+>     (`TaskbarHost::Start_System` takes the primary taskbar's state), is
+>     shown. And the Start menu and the Notification Center, which Windows
+>     lays out for the monitor it opens them on, are no longer moved to the
+>     monitor of whichever taskbar the cursor is over, which drew the Start
+>     menu part-way across the wrong monitor; Search still follows the
+>     taskbar whose Search button was clicked.
+>
+> Everything else — the island auto-scaling, the WindhawkBlur engine, the
+> Y-above-taskbar clamp and Notification-Center detection — is upstream's
+> code, used as-is. Earlier versions of this fork carried their own
+> popup-placement hook; it was dropped in favour of upstream's, which handles
+> the same cases more robustly.
 >
 > ### Building
 >
@@ -195,6 +232,7 @@ Huge thanks to these awesome developers who made this mod possible -- your contr
 | `NotificationCenterPrimaryOnly` | Notification Center on primary monitor only | When enabled, the Notification Center (the clock/calendar popup) is only repositioned when opened on the primary monitor. On secondary monitors it appears at Windows' native default position. Only affects the Notification Center - Start Menu, Search and Control Center are unaffected. Default is off. | Boolean (true/false) |
 | `MoveFlyoutKeyboardLayout` | Move keyboard layout flyout with Taskbar | When enabled, the keyboard layout flyout (opened by clicking the language indicator or pressing Win+Space) is centered above the language indicator on the taskbar instead of at the right edge of the screen. On a monitor whose taskbar has no language indicator it is centered above the tray instead. Default is on. | Boolean (true/false) |
 | `MoveTrayContextMenus` | Move tray icon menus with Taskbar | When enabled, the right-click menus of the clock and the system tray icons (network, volume, battery, language) open at the right end of the taskbar, lined up with the Notification Center, instead of at the right edge of the screen. Default is on. | Boolean (true/false) |
+| `StartMenuOnActiveMonitor` | Open Start on the monitor in use | When enabled, the Start menu opened with the Win key (or Ctrl+Esc) opens on the monitor of the window you are working in, or the one under the mouse when the desktop or a taskbar has focus, instead of always on the main display. A taskbar's Start button already opens it on that taskbar's monitor. Only monitors with a taskbar are used. Default is on. | Boolean (true/false) |
 */
 // ==/WindhawkModReadme==
 // ==WindhawkModSettings==
@@ -318,6 +356,9 @@ Huge thanks to these awesome developers who made this mod possible -- your contr
 - MoveTrayContextMenus: true
   $name: Move tray icon menus with Taskbar
   $description: When enabled, the right-click menus of the clock and the system tray icons (network, volume, battery, language) open at the right end of the taskbar, lined up with the Notification Center, instead of at the right edge of the screen. Default is on.
+- StartMenuOnActiveMonitor: true
+  $name: Open Start on the monitor in use
+  $description: When enabled, the Start menu opened with the Win key (or Ctrl+Esc) opens on the monitor of the window you are working in, or the one under the mouse when the desktop or a taskbar has focus, instead of always on the main display. A taskbar's Start button already opens it on that taskbar's monitor. Only monitors with a taskbar are used. Default is on.
 */
 // ==/WindhawkModSettings==
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -722,17 +763,46 @@ static HMONITOR GetFlyoutLayoutMonitorTai(HWND flyoutWindow) {
   }
   return monitor;
 }
-HMONITOR ResolveFlyoutMonitorTai(HWND flyoutWindow) {
-  // Fork addition: Windows lays a flyout's window out on the monitor it opens
-  // it on before revealing it; the Start menu's spans that monitor's width
-  // above the taskbar. The guesses below take the monitor of a taskbar under
-  // the cursor, right for a click but not for the Win key (or Win+S) pressed
-  // with the cursor resting over another monitor's taskbar: the Start menu
-  // was moved there still laid out for its own monitor, and drawn part-way
-  // across the other. So the window's own monitor comes first, and the
-  // guesses are left for a window not yet on any one monitor.
-  if (HMONITOR monitor = GetFlyoutLayoutMonitorTai(flyoutWindow)) {
-    return monitor;
+// Fork addition: which flyout ResolveFlyoutMonitorTai is placing.
+enum class FlyoutKindTai { StartMenu, Search, NotificationCenter };
+static std::atomic<uintptr_t> g_lastStartMenuMonitorTai{0};
+static std::atomic<ULONGLONG> g_lastStartMenuTimeTai{0};
+// showing is false when the window is being hidden.
+HMONITOR ResolveFlyoutMonitorTai(HWND flyoutWindow, FlyoutKindTai kind,
+                                 bool showing) {
+  // Fork addition. The guesses further down take the monitor of a taskbar
+  // under the cursor. Search needs them: Windows opens it on the monitor the
+  // Start menu last used (SearchAppDesktopExperienceView asks the launcher),
+  // not the one whose Search button was clicked. The Start menu and the
+  // Notification Center must not have them. Windows lays those out for the
+  // monitor it opens them on, the Start menu across the whole width above the
+  // taskbar, and a Start menu opened with the Win key while the cursor rested
+  // over another monitor's taskbar was moved there with that layout and drawn
+  // part-way across it. They stay where Windows put them, and Search opening
+  // with the Start menu, as its search pane, goes with it.
+  constexpr ULONGLONG kStartMenuSearchPaneTtlMs = 500;
+  if (kind != FlyoutKindTai::Search) {
+    if (HMONITOR monitor = GetFlyoutLayoutMonitorTai(flyoutWindow)) {
+      if (kind == FlyoutKindTai::StartMenu && showing) {
+        g_lastStartMenuMonitorTai.store(reinterpret_cast<uintptr_t>(monitor),
+                                        std::memory_order_release);
+        g_lastStartMenuTimeTai.store(GetTickCount64(),
+                                     std::memory_order_release);
+      }
+      return monitor;
+    }
+  } else {
+    const ULONGLONG startMenuTime =
+        g_lastStartMenuTimeTai.load(std::memory_order_acquire);
+    const ULONGLONG now = GetTickCount64();
+    HMONITOR startMenuMonitor = reinterpret_cast<HMONITOR>(
+        g_lastStartMenuMonitorTai.load(std::memory_order_acquire));
+    MONITORINFO monitorInfo{.cbSize = sizeof(MONITORINFO)};
+    if (startMenuTime && now >= startMenuTime &&
+        now - startMenuTime <= kStartMenuSearchPaneTtlMs &&
+        startMenuMonitor && GetMonitorInfoW(startMenuMonitor, &monitorInfo)) {
+      return startMenuMonitor;
+    }
   }
   constexpr DWORD kInvocationMessageTtlMs = 2500;
   const DWORD messageTime = static_cast<DWORD>(GetMessageTime());
@@ -5102,7 +5172,11 @@ HRESULT WINAPI DwmSetWindowAttribute_Hook(HWND hwnd,
     }  else {
         return original();
     }
-    HMONITOR monitor = ResolveFlyoutMonitorTai(hwnd);
+    HMONITOR monitor = ResolveFlyoutMonitorTai(
+        hwnd, target == DwmTarget::StartMenu    ? FlyoutKindTai::StartMenu
+              : target == DwmTarget::SearchHost ? FlyoutKindTai::Search
+                                                : FlyoutKindTai::NotificationCenter,
+        !cloak);
     UINT monitorDpiX = 96;
     UINT monitorDpiY = 96;
     if (!monitor ||
@@ -9616,6 +9690,102 @@ long WINAPI CActionCenterExperienceManager_GetViewPosition_Hook(void* pThis,
   g_hookCallCounter--;
   return result;
 }
+// Fork addition: open the Start menu on the monitor in use when it is opened
+// other than with a taskbar's Start button (the Win key, Ctrl+Esc).
+//
+// XamlLauncher::ShowStartView calls AdjustMonitorConnectedIfNeeded for those,
+// which moves the launcher to the primary monitor unless it is there already,
+// so the Win key always opened Start on the main display. A Start button click
+// skips that call; the launcher was moved to the clicked taskbar's monitor
+// beforehand, with ConnectToMonitor(HWND, POINT). Doing the same with the
+// monitor in use has Windows lay the Start menu, and the Search pane that
+// opens with it, out on that monitor itself; moving the laid-out window
+// afterwards draws it part-way across the wrong monitor.
+//
+// ConnectToMonitor returns false when the launcher is on that monitor already,
+// so its result is not a failure.
+using ImmersiveMonitorHelper_AdjustMonitorConnectedIfNeeded_t =
+    HRESULT(WINAPI*)(void* pThis);
+static ImmersiveMonitorHelper_AdjustMonitorConnectedIfNeeded_t
+    ImmersiveMonitorHelper_AdjustMonitorConnectedIfNeeded_Original = nullptr;
+using ImmersiveMonitorHelper_ConnectToMonitor_t =
+    bool(WINAPI*)(void* pThis, HWND window, POINT point);
+static ImmersiveMonitorHelper_ConnectToMonitor_t
+    ImmersiveMonitorHelper_ConnectToMonitor_Original = nullptr;
+// The monitor of the window being worked in; or, when that is the desktop or a
+// taskbar, which belong to no one monitor, the monitor under the mouse.
+static HMONITOR GetMonitorInUseTai() {
+  if (HWND foreground = GetForegroundWindow()) {
+    HWND root = GetAncestor(foreground, GA_ROOTOWNER);
+    WCHAR className[64]{};
+    if (!root || !GetClassNameW(root, className, ARRAYSIZE(className)) ||
+        (_wcsicmp(className, L"Progman") != 0 &&
+         _wcsicmp(className, L"WorkerW") != 0 &&
+         !IsTaskbarWindowClassTai(root))) {
+      if (HMONITOR monitor =
+              MonitorFromWindow(foreground, MONITOR_DEFAULTTONULL)) {
+        return monitor;
+      }
+    }
+  }
+  POINT cursor{};
+  return GetCursorPos(&cursor)
+             ? MonitorFromPoint(cursor, MONITOR_DEFAULTTONULL)
+             : nullptr;
+}
+static bool MonitorHasTaskbarTai(HMONITOR monitor) {
+  struct Context {
+    HMONITOR monitor;
+    bool found;
+  } context{monitor, false};
+  EnumWindows(
+      [](HWND hWnd, LPARAM lParam) -> BOOL {
+        auto* context = reinterpret_cast<Context*>(lParam);
+        DWORD pid = 0;
+        if (GetWindowThreadProcessId(hWnd, &pid) &&
+            pid == GetCurrentProcessId() && IsTaskbarWindowClassTai(hWnd) &&
+            GetTaskbarMonitorTai(hWnd) == context->monitor) {
+          context->found = true;
+          return FALSE;
+        }
+        return TRUE;
+      },
+      reinterpret_cast<LPARAM>(&context));
+  return context.found;
+}
+HRESULT WINAPI ImmersiveMonitorHelper_AdjustMonitorConnectedIfNeeded_Hook(
+    void* pThis) {
+  if (!g_unloading && ImmersiveMonitorHelper_ConnectToMonitor_Original &&
+      Wh_GetIntSetting(L"StartMenuOnActiveMonitor")) {
+    HMONITOR monitor = GetMonitorInUseTai();
+    MONITORINFOEXW monitorInfo{};
+    monitorInfo.cbSize = sizeof(monitorInfo);
+    if (monitor && MonitorHasTaskbarTai(monitor) &&
+        GetMonitorInfoW(monitor, &monitorInfo)) {
+      const RECT& bounds = monitorInfo.rcMonitor;
+      const POINT center{(bounds.left + bounds.right) / 2,
+                         (bounds.top + bounds.bottom) / 2};
+      ImmersiveMonitorHelper_ConnectToMonitor_Original(pThis, nullptr, center);
+      Wh_Log(L"[StartMenu] opening on the monitor in use: %s",
+             monitorInfo.szDevice);
+      return S_OK;
+    }
+  }
+  return ImmersiveMonitorHelper_AdjustMonitorConnectedIfNeeded_Original(pThis);
+}
+static bool HookStartMenuMonitorTai(HMODULE twinuiPcshellModule) {
+  WindhawkUtils::SYMBOL_HOOK twinuiPcshellHooks[] = {
+      {{LR"(public: bool __cdecl ImmersiveMonitorHelper::ConnectToMonitor(struct HWND__ *,struct tagPOINT))"},
+       &ImmersiveMonitorHelper_ConnectToMonitor_Original},
+      {{LR"(public: long __cdecl ImmersiveMonitorHelper::AdjustMonitorConnectedIfNeeded(void))"},
+       &ImmersiveMonitorHelper_AdjustMonitorConnectedIfNeeded_Original,
+       ImmersiveMonitorHelper_AdjustMonitorConnectedIfNeeded_Hook},
+  };
+  const bool hooked = WindhawkUtils::HookSymbols(
+      twinuiPcshellModule, twinuiPcshellHooks, ARRAYSIZE(twinuiPcshellHooks));
+  Wh_Log(L"[StartMenu] monitor hook %s", hooked ? L"set" : L"unavailable");
+  return hooked;
+}
 static bool HookNotificationCenterViewPositionTai(HMODULE twinuiPcshellModule) {
   WindhawkUtils::SYMBOL_HOOK twinuiPcshellHooks[] = {
       {{LR"(private: long __cdecl CActionCenterExperienceManager::GetViewPosition(struct tagRECT &))"},
@@ -9626,7 +9796,10 @@ static bool HookNotificationCenterViewPositionTai(HMODULE twinuiPcshellModule) {
       twinuiPcshellModule, twinuiPcshellHooks, ARRAYSIZE(twinuiPcshellHooks));
   Wh_Log(L"[NotificationCenter] GetViewPosition hook %s",
          hooked ? L"set" : L"unavailable");
-  return hooked;
+  // Fork addition: see ImmersiveMonitorHelper_AdjustMonitorConnectedIfNeeded_Hook.
+  // Hooked separately so that either can be missing on a Windows build.
+  const bool startMenuHooked = HookStartMenuMonitorTai(twinuiPcshellModule);
+  return hooked || startMenuHooked;
 }
 // A Win32 thread and event rather than std::thread: a std::thread still
 // joinable when this DLL's globals are destroyed at process exit would
