@@ -2,7 +2,7 @@
 // @id              taskbar-dock-like
 // @name            TAI (taskbar as island) for Windows 11 - vo fork
 // @description     Centers and floats the taskbar, moves the system tray next to the task area, and serves as an all-in-one, one-click mod to transform the taskbar into an animated dock. Fork additions: the clickable taskbar area is clipped to the visible island, and the Notification Center can be limited to the primary monitor.
-// @version         1.5.257-vo
+// @version         1.5.258-vo
 // @author          vitaliiorlov (fork of DarkionAvey)
 // @github          https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed
 // @include         explorer.exe
@@ -4341,12 +4341,15 @@ __int64 WINAPI CTraySearchControl__WndProc_Hook(void* pThis, void* pHwnd, unsign
 }
 interface ITaskGroup;
 interface ITaskItem;
-using CTaskBand__UpdateItemIcon_WithArgs_t = void(WINAPI*)(void* pThis, ITaskGroup* param1, ITaskItem* param2);
+// iconVariants was added in Windows 11 build 26100.9549. On older builds the
+// hook is bound to the two-argument function instead; the extra argument then
+// only carries whatever is left in its register, and the original ignores it.
+using CTaskBand__UpdateItemIcon_WithArgs_t = void(WINAPI*)(void* pThis, ITaskGroup* param1, ITaskItem* param2, void* iconVariants);
 CTaskBand__UpdateItemIcon_WithArgs_t CTaskBand__UpdateItemIcon_WithArgs_Original;
-void WINAPI CTaskBand__UpdateItemIcon_WithArgs_Hook(void* pThis, ITaskGroup* param1, ITaskItem* param2) {
+void WINAPI CTaskBand__UpdateItemIcon_WithArgs_Hook(void* pThis, ITaskGroup* param1, ITaskItem* param2, void* iconVariants) {
   Wh_Log(L"Method called: CTaskBand__UpdateItemIcon");
   if (CTaskBand__UpdateItemIcon_WithArgs_Original) {
-    CTaskBand__UpdateItemIcon_WithArgs_Original(pThis, param1, param2);
+    CTaskBand__UpdateItemIcon_WithArgs_Original(pThis, param1, param2, iconVariants);
   }
   ApplySettingsFromTaskbarThreadIfRequired();
 }
@@ -4408,7 +4411,16 @@ bool HookTaskbarDllSymbolsStartButtonPosition() {
         return false;
     }
     WindhawkUtils::SYMBOL_HOOK taskbarDllHooks[] = {{{LR"(public: virtual void __cdecl CTaskBand::RemoveIcon(struct ITaskItem *))"}, &CTaskBand_RemoveIcon_WithArgs_Original, CTaskBand_RemoveIcon_WithArgs_Hook},
-    {{LR"(protected: void __cdecl CTaskBand::_UpdateItemIcon(struct ITaskGroup *,struct ITaskItem *))"}, &CTaskBand__UpdateItemIcon_WithArgs_Original, CTaskBand__UpdateItemIcon_WithArgs_Hook},
+    {
+        {
+            LR"(protected: void __cdecl CTaskBand::_UpdateItemIcon(struct ITaskGroup *,struct ITaskItem *,class std::vector<struct TaskbarIcon::Variant,class std::allocator<struct TaskbarIcon::Variant> > const *))",
+            // Before Windows 11 build 26100.9549.
+            LR"(protected: void __cdecl CTaskBand::_UpdateItemIcon(struct ITaskGroup *,struct ITaskItem *))",
+        },
+        &CTaskBand__UpdateItemIcon_WithArgs_Original,
+        CTaskBand__UpdateItemIcon_WithArgs_Hook,
+        true,  // Only a relayout trigger; a future signature change must not unload the mod.
+    },
     {
         {LR"(protected: static __int64 __cdecl CImpWndProc::s_WndProc(struct HWND__ *,unsigned int,unsigned __int64,__int64))"},
         &CImpWndProc__WndProc_Original,
