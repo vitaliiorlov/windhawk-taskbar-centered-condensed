@@ -3166,77 +3166,161 @@ void LogAllSettings() {
 // feeding pre-scale geometry here would clip a region wider than what is
 // actually drawn. Only the X axis is clipped -- the full window height stays
 // clickable so the auto-hide reveal zone is unaffected.
-struct UpdateTaskbarRegionContext {
-  const std::wstring* monitorName;
-  float visibleXDip;
-  float visibleWidthDip;
-  float cornerRadiusDip;
-  float rasterizationScale;
-  bool clear;
-};
+//
+// Windows sets and clears this region too. It clips an auto-hidden taskbar to
+// the sliver still on its monitor, so the rest cannot show on a neighbouring
+// monitor, and clears the region again when the taskbar comes back. So the
+// region is left to Windows while the taskbar is not entirely on its monitor,
+// and otherwise checked against the window on every pass rather than set only
+// when the island moves: that missed Windows clearing it, and never undid a
+// region written to the wrong taskbar, which clipped the island mid-way on a
+// laptop below an external monitor (upstream issue #32).
+static bool IsTaskbarWindowOnItsMonitorTai(HWND taskbarWindow,
+                                           RECT const& windowRect) {
+  MONITORINFO monitorInfo{.cbSize = sizeof(MONITORINFO)};
+  if (!GetMonitorInfoW(GetTaskbarMonitorTai(taskbarWindow), &monitorInfo)) {
+    return false;
+  }
+  RECT const& monitor = monitorInfo.rcMonitor;
+  return windowRect.left >= monitor.left && windowRect.top >= monitor.top &&
+         windowRect.right <= monitor.right &&
+         windowRect.bottom <= monitor.bottom;
+}
 
-void UpdateTaskbarWindowRegion(std::wstring const& monitorName,
+// Fork addition: the taskbar window on a monitor, for callers that have only
+// its name. Explorer keeps one taskbar per monitor.
+static HWND FindTaskbarWindowForMonitorTai(std::wstring const& monitorName) {
+  struct Context {
+    const std::wstring* monitorName;
+    HWND window;
+  } context{&monitorName, nullptr};
+  EnumWindows(
+      [](HWND hWnd, LPARAM lParam) -> BOOL {
+        auto* context = reinterpret_cast<Context*>(lParam);
+        DWORD pid = 0;
+        if (!GetWindowThreadProcessId(hWnd, &pid) ||
+            pid != GetCurrentProcessId() || !IsTaskbarWindowClassTai(hWnd)) {
+          return TRUE;
+        }
+        if (GetMonitorName(GetTaskbarMonitorTai(hWnd)) !=
+            *context->monitorName) {
+          return TRUE;
+        }
+        context->window = hWnd;
+        return FALSE;
+      },
+      reinterpret_cast<LPARAM>(&context));
+  return context.window;
+}
+
+// force re-applies a region the window already has the bounds of, for when
+// only its corner radius changed. Returns false when the window was left
+// alone because it is not on its monitor.
+bool UpdateTaskbarWindowRegion(HWND taskbarWindow,
                                float visibleXDip,
                                float visibleWidthDip,
                                float cornerRadiusDip,
                                float rasterizationScale,
-                               bool clear) {
-  UpdateTaskbarRegionContext ctx{&monitorName,       visibleXDip,
-                                 visibleWidthDip,    cornerRadiusDip,
-                                 rasterizationScale, clear};
-  EnumWindows(
-      [](HWND hWnd, LPARAM lParam) -> BOOL {
-        auto* ctx = reinterpret_cast<UpdateTaskbarRegionContext*>(lParam);
-        DWORD pid = 0;
-        if (!GetWindowThreadProcessId(hWnd, &pid) ||
-            pid != GetCurrentProcessId()) {
-          return TRUE;
-        }
-        if (!IsTaskbarWindowClassTai(hWnd)) {
-          return TRUE;
-        }
-        HMONITOR mon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
-        if (GetMonitorName(mon) != *ctx->monitorName) {
-          return TRUE;
-        }
-        if (ctx->clear) {
-          SetWindowRgn(hWnd, nullptr, TRUE);
-          return FALSE;
-        }
-        RECT wnd{};
-        if (!GetWindowRect(hWnd, &wnd)) {
-          return FALSE;
-        }
-        const int wndW = wnd.right - wnd.left;
-        const int wndH = wnd.bottom - wnd.top;
-        if (wndW <= 0 || wndH <= 0) {
-          return FALSE;
-        }
-        const float scale =
-            ctx->rasterizationScale > 0.0f ? ctx->rasterizationScale : 1.0f;
-        int x1 = static_cast<int>(std::lround(ctx->visibleXDip * scale));
-        int x2 = static_cast<int>(
-            std::lround((ctx->visibleXDip + ctx->visibleWidthDip) * scale));
-        if (x1 < 0) x1 = 0;
-        if (x2 > wndW) x2 = wndW;
-        if (x2 - x1 < 10) {
-          // Too small to be useful; fall back to the full window rather than
-          // risk making the taskbar unclickable.
-          SetWindowRgn(hWnd, nullptr, TRUE);
-          return FALSE;
-        }
-        int cr = static_cast<int>(std::lround(ctx->cornerRadiusDip * scale));
-        if (cr < 0) cr = 0;
-        if (cr * 2 > x2 - x1) cr = (x2 - x1) / 2;
-        if (cr * 2 > wndH) cr = wndH / 2;
-        HRGN hRgn = (cr > 0) ? CreateRoundRectRgn(x1, 0, x2 + 1, wndH + 1,
-                                                  cr * 2, cr * 2)
-                             : CreateRectRgn(x1, 0, x2, wndH);
-        // SetWindowRgn takes ownership of hRgn; do not DeleteObject after.
-        SetWindowRgn(hWnd, hRgn, TRUE);
-        return FALSE;
-      },
-      reinterpret_cast<LPARAM>(&ctx));
+                               bool force) {
+  RECT wnd{};
+  if (!taskbarWindow || !GetWindowRect(taskbarWindow, &wnd) ||
+      !IsTaskbarWindowOnItsMonitorTai(taskbarWindow, wnd)) {
+    return false;
+  }
+  const int wndW = wnd.right - wnd.left;
+  const int wndH = wnd.bottom - wnd.top;
+  if (wndW <= 0 || wndH <= 0) {
+    return false;
+  }
+  const float scale = rasterizationScale > 0.0f ? rasterizationScale : 1.0f;
+  int x1 = static_cast<int>(std::lround(visibleXDip * scale));
+  int x2 = static_cast<int>(
+      std::lround((visibleXDip + visibleWidthDip) * scale));
+  if (x1 < 0) x1 = 0;
+  if (x2 > wndW) x2 = wndW;
+  RECT current{};
+  const int currentType = GetWindowRgnBox(taskbarWindow, &current);
+  const bool hasRegion =
+      currentType == SIMPLEREGION || currentType == COMPLEXREGION;
+  if (x2 - x1 < 10) {
+    // Too small to be useful; fall back to the full window rather than
+    // risk making the taskbar unclickable.
+    if (hasRegion) {
+      SetWindowRgn(taskbarWindow, nullptr, TRUE);
+    }
+    return true;
+  }
+  // Both region shapes below report this bounding box.
+  if (!force && hasRegion && std::abs(current.left - x1) <= 1 &&
+      std::abs(current.right - x2) <= 1 && current.top == 0 &&
+      std::abs(current.bottom - wndH) <= 1) {
+    return true;
+  }
+  int cr = static_cast<int>(std::lround(cornerRadiusDip * scale));
+  if (cr < 0) cr = 0;
+  if (cr * 2 > x2 - x1) cr = (x2 - x1) / 2;
+  if (cr * 2 > wndH) cr = wndH / 2;
+  HRGN hRgn = (cr > 0) ? CreateRoundRectRgn(x1, 0, x2 + 1, wndH + 1,
+                                            cr * 2, cr * 2)
+                       : CreateRectRgn(x1, 0, x2, wndH);
+  // SetWindowRgn takes ownership of hRgn; do not DeleteObject after.
+  SetWindowRgn(taskbarWindow, hRgn, TRUE);
+  return true;
+}
+
+// Fork addition: a secondary taskbar could sit on screen with its XAML island
+// window hidden, drawing nothing, and moving the mouse to the screen edge did
+// not bring it back (the laptop taskbar that seemed to render "outside the
+// visible area").
+//
+// Windows hides a taskbar's island while the taskbar is auto-hidden
+// (TaskbarHost::SetAutoHide). A secondary taskbar being set up, when a monitor
+// is connected or Explorer restarts, takes that from the primary taskbar's
+// state instead of its own (TaskbarHost::Start_System calls
+// TrayUI::GetAutoHideFlags), while the secondary taskbar itself starts out
+// shown. So if the primary is auto-hidden at that moment, the new taskbar is
+// shown but empty, and since it counts as shown, hovering does not unhide it.
+// It recovers only once it has auto-hidden and come back, and "Taskbar
+// auto-hide when maximized" puts that off until something is maximized there.
+//
+// Windows hides the island only after sliding the taskbar off its monitor, and
+// shows it before sliding it back, so a hidden island on a taskbar that sits
+// entirely on its monitor is always this state. It is shown the way
+// TaskbarHost::SetAutoHide shows it: the island's IsVisible is nothing but the
+// window's visibility, set with ShowWindow(SW_SHOWNA).
+void RepairSecondaryTaskbarIslandTai(HWND taskbarWindow,
+                                     std::wstring const& monitorName) {
+  if (g_unloading || !taskbarWindow || !IsWindowVisible(taskbarWindow)) {
+    return;
+  }
+  WCHAR className[64]{};
+  if (!GetClassNameW(taskbarWindow, className, ARRAYSIZE(className)) ||
+      _wcsicmp(className, L"Shell_SecondaryTrayWnd") != 0) {
+    return;
+  }
+  BOOL cloaked = FALSE;
+  if (SUCCEEDED(DwmGetWindowAttribute(taskbarWindow, DWMWA_CLOAKED, &cloaked,
+                                      sizeof(cloaked))) &&
+      cloaked) {
+    return;
+  }
+  HWND island = FindWindowExW(
+      taskbarWindow, nullptr,
+      L"Windows.UI.Composition.DesktopWindowContentBridge", nullptr);
+  RECT windowRect{};
+  if (!island || IsWindowVisible(island) ||
+      !GetWindowRect(taskbarWindow, &windowRect) ||
+      !IsTaskbarWindowOnItsMonitorTai(taskbarWindow, windowRect)) {
+    return;
+  }
+  ShowWindow(island, SW_SHOWNA);
+  WCHAR detail[160];
+  swprintf_s(detail, ARRAYSIZE(detail),
+             L"shown monitor=%s window=(%ld,%ld)-(%ld,%ld)",
+             monitorName.c_str(), windowRect.left, windowRect.top,
+             windowRect.right, windowRect.bottom);
+  Wh_Log(L"[SecondaryTaskbarIsland] %s", detail);
+  LogTaskbarEventToFileTai(L"SecondaryTaskbarIsland", detail);
 }
 
 // Clear the region on every taskbar window in this process, regardless of
@@ -4594,29 +4678,31 @@ bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorNam
   // island. Uses the POST-scale bounds computed above so the clip tracks the
   // island when it is shrunk on overflow, and the anchored (not centered) left
   // edge. Placed before the "nothing changed" early-out below so it still runs
-  // on cheap passes; the cached inputs keep it a no-op when nothing moved.
+  // on cheap passes; UpdateTaskbarWindowRegion is a no-op when the window
+  // already has the right region.
   {
+    HWND taskbarWindow = g_applyStyleTaskbarWindowTai
+                             ? g_applyStyleTaskbarWindowTai
+                             : FindTaskbarWindowForMonitorTai(monitorName);
     const bool clearRegion =
         g_unloading || g_settings.userDefinedFullWidthTaskbarBackground;
-    const float regionX = clearRegion ? 0.0f : scaledBackgroundLeftScreen;
-    const float regionW =
-        clearRegion
-            ? static_cast<float>(rootWidth)
-            : (scaledBackgroundRightScreen - scaledBackgroundLeftScreen);
-    const float regionCorner =
-        clearRegion ? 0.0f
-                    : (g_settings.userDefinedTaskbarCornerRadius *
-                       targetTaskbarIslandScale);
-    if (state.lastRegionClear != clearRegion ||
-        std::abs(state.lastRegionX - regionX) > 0.5f ||
-        std::abs(state.lastRegionW - regionW) > 0.5f ||
-        std::abs(state.lastRegionCorner - regionCorner) > 0.5f) {
-      state.lastRegionClear = clearRegion;
-      state.lastRegionX = regionX;
-      state.lastRegionW = regionW;
-      state.lastRegionCorner = regionCorner;
-      UpdateTaskbarWindowRegion(monitorName, regionX, regionW, regionCorner,
-                                rasterizationScale, clearRegion);
+    if (clearRegion) {
+      if (!state.lastRegionClear && taskbarWindow) {
+        SetWindowRgn(taskbarWindow, nullptr, TRUE);
+      }
+      state.lastRegionClear = true;
+    } else {
+      const float regionCorner =
+          g_settings.userDefinedTaskbarCornerRadius * targetTaskbarIslandScale;
+      const bool regionCornerChanged =
+          std::abs(state.lastRegionCorner - regionCorner) > 0.5f;
+      if (UpdateTaskbarWindowRegion(
+              taskbarWindow, scaledBackgroundLeftScreen,
+              scaledBackgroundRightScreen - scaledBackgroundLeftScreen,
+              regionCorner, rasterizationScale, regionCornerChanged)) {
+        state.lastRegionClear = false;
+        state.lastRegionCorner = regionCorner;
+      }
     }
   }
   if (!forceStyleApply && !invalidateDimensionsThisPass && !g_unloading &&

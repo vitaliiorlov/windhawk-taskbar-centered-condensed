@@ -26,14 +26,12 @@ struct TaskbarState {
   float lastTargetOffsetY{0};
   float initOffsetX{-1};
   bool wasOverflowing{false};
-  // Fork addition: cached SetWindowRgn inputs (monitor-relative DIPs, already
-  // post island-scale) so SetWindowRgn is only called when the visible bounds
-  // actually change. lastRegionClear=true means the window currently has no
-  // region set, i.e. the full width is clickable.
-  float lastRegionX{-1.0f};
-  float lastRegionW{-1.0f};
-  float lastRegionCorner{-1.0f};
+  // Fork addition: false once ApplyStyle has clipped the taskbar window to the
+  // island (UpdateTaskbarWindowRegion), so turning the clip off clears it once.
+  // lastRegionCorner is the clip's corner radius in DIPs, which the window's
+  // region bounds cannot show a change of.
   bool lastRegionClear{true};
+  float lastRegionCorner{-1.0f};
   uintptr_t lastOverflowButtonIdentity{0};
   bool overflowButtonSuppressionKnown{false};
   bool overflowButtonSuppressed{false};
@@ -117,11 +115,36 @@ bool IsTaskbarWindowClassTai(HWND window) {
          _wcsicmp(className, L"Shell_SecondaryTrayWnd") == 0;
 }
 
+// Fork addition: the monitor a taskbar belongs to. Explorer records it on every
+// taskbar window as the "TaskbarMonitor" property, which ApplySettingsTBIconSize
+// already reads for the DPI. MonitorFromWindow is no substitute: an auto-hidden
+// taskbar is parked almost entirely off its monitor, so with another monitor
+// below it (a laptop under an external screen, upstream issue #32) it names that
+// neighbour, and two taskbars get styled, and clipped, as one. The property can
+// outlive its monitor during a display change, hence the fallback.
+HMONITOR GetTaskbarMonitorTai(HWND taskbarWindow) {
+  if (!taskbarWindow) {
+    return nullptr;
+  }
+  HMONITOR monitor =
+      reinterpret_cast<HMONITOR>(GetPropW(taskbarWindow, L"TaskbarMonitor"));
+  MONITORINFO monitorInfo{.cbSize = sizeof(MONITORINFO)};
+  if (monitor && GetMonitorInfoW(monitor, &monitorInfo)) {
+    return monitor;
+  }
+  return MonitorFromWindow(taskbarWindow, MONITOR_DEFAULTTONEAREST);
+}
+
+// Fork addition: the taskbar window ApplyStyle is styling, set around the call
+// by ApplySettingsFromTaskbarThread. ApplyStyle is only handed the taskbar's
+// XAML, and UpdateTaskbarWindowRegion needs the window it belongs to.
+thread_local HWND g_applyStyleTaskbarWindowTai = nullptr;
+
 HMONITOR GetTaskbarMonitorFromPointTai(POINT point) {
   for (HWND window = WindowFromPoint(point); window;
        window = GetParent(window)) {
     if (IsTaskbarWindowClassTai(window)) {
-      return MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+      return GetTaskbarMonitorTai(window);
     }
   }
 
@@ -140,8 +163,7 @@ HMONITOR GetTaskbarMonitorFromPointTai(POINT point) {
         RECT rect{};
         if (GetWindowRect(window, &rect) &&
             PtInRect(&rect, context->point)) {
-          context->monitor =
-              MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+          context->monitor = GetTaskbarMonitorTai(window);
           return FALSE;
         }
         return TRUE;
@@ -182,8 +204,7 @@ void RecordTaskbarInvocationMonitorTai(HWND taskbarWindow, UINT message) {
   HMONITOR monitor =
       GetTaskbarMonitorFromPointTai(GetCurrentMessagePointTai());
   if (!monitor && taskbarWindow) {
-    monitor =
-        MonitorFromWindow(taskbarWindow, MONITOR_DEFAULTTONEAREST);
+    monitor = GetTaskbarMonitorTai(taskbarWindow);
   }
   if (!monitor) {
     return;
@@ -529,7 +550,25 @@ void LogContextMenuPlacementToFileTai(PCWSTR menu,
   fclose(f);
 }
 
+// Fork addition: things the mod did to a taskbar window as a whole rather than
+// to a flyout: event names what happened, detail the specifics.
+void LogTaskbarEventToFileTai(PCWSTR event, PCWSTR detail) {
+  FILE* f = OpenPopupLogFileTai();
+  if (!f) {
+    return;
+  }
+  SYSTEMTIME st{};
+  GetLocalTime(&st);
+  fwprintf(f, L"%02d:%02d:%02d.%03d %s %s\n", st.wHour, st.wMinute,
+           st.wSecond, st.wMilliseconds, event, detail);
+  fclose(f);
+}
+
 // Fork addition: defined in win-dock-mod.cpp, called from the dependencies'
 // HookSystemTraySymbols and HookTaskbarViewDllSymbolsStartButtonPosition.
 bool HookTrayContextMenuPositionTai(HMODULE systemTrayModule);
 bool HookStartButtonContextMenuPositionTai(HMODULE taskbarViewModule);
+// Fork addition: defined in win-dock-mod.cpp, called from the dependencies'
+// ApplySettingsFromTaskbarThread.
+void RepairSecondaryTaskbarIslandTai(HWND taskbarWindow,
+                                     std::wstring const& monitorName);

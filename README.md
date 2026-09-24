@@ -18,7 +18,7 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >
 > Upstream: [DarkionAvey/windhawk-taskbar-centered-condensed](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed).
 > This fork ([vitaliiorlov/windhawk-taskbar-centered-condensed](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed))
-> tracks upstream closely and adds six things on top.
+> tracks upstream closely and adds seven things on top.
 >
 > ### What's different from upstream
 >
@@ -28,7 +28,9 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    settings" menu) land on the empty strips either side. This fork uses
 >    `SetWindowRgn` so the OS only routes mouse input to pixels inside the
 >    island. The clip is driven by the post-scale island bounds, so it tracks
->    the island when upstream shrinks it on overflow. Also proposed upstream as
+>    the island when upstream shrinks it on overflow. While an auto-hidden
+>    taskbar is off screen the region is left to Windows, which clips it
+>    itself, and it is put back once Windows clears it. Also proposed upstream as
 >    [PR #19](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/pull/19).
 >
 > 2. **`NotificationCenterPrimaryOnly` setting.**
@@ -72,6 +74,18 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    battery's above the taskbar instead of over it. Tray menus follow the
 >    `MoveTrayContextMenus` setting (on by default), the Start button's
 >    follows `MoveFlyoutStartMenu`.
+>
+> 7. **Taskbars on several monitors are kept apart.**
+>    Each taskbar is matched to its monitor by the `TaskbarMonitor` property
+>    Explorer sets on it, not by where its window happens to be: an auto-hidden
+>    taskbar parked over the monitor below it was styled and clipped as that
+>    monitor's taskbar, cutting the island off
+>    ([upstream issue #32](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issues/32)).
+>    The taskbar lookup no longer crashes Explorer when a display change
+>    catches a taskbar before its frame exists. And a secondary taskbar that
+>    Windows sets up while the primary one is auto-hidden, which Windows
+>    leaves invisible (`TaskbarHost::Start_System` takes the primary
+>    taskbar's state), is shown.
 >
 > Everything else — the island auto-scaling, the WindhawkBlur engine, flyout
 > monitor resolution, the Y-above-taskbar clamp and Notification-Center
