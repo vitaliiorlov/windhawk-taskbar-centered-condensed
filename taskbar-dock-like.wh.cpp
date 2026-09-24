@@ -2,7 +2,7 @@
 // @id              taskbar-dock-like
 // @name            TAI (taskbar as island) for Windows 11 - vo fork
 // @description     Centers and floats the taskbar, moves the system tray next to the task area, and serves as an all-in-one, one-click mod to transform the taskbar into an animated dock. Fork additions: the clickable taskbar area is clipped to the visible island, and the Notification Center can be limited to the primary monitor.
-// @version         1.5.259-vo
+// @version         1.5.260-vo
 // @author          vitaliiorlov (fork of DarkionAvey)
 // @github          https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed
 // @include         explorer.exe
@@ -30,7 +30,7 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >
 > Upstream: [DarkionAvey/windhawk-taskbar-centered-condensed](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed).
 > This fork ([vitaliiorlov/windhawk-taskbar-centered-condensed](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed))
-> tracks upstream closely and adds four things on top.
+> tracks upstream closely and adds five things on top.
 >
 > ### What's different from upstream
 >
@@ -61,6 +61,17 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    indicator as the flyout is positioned, on whichever monitor Windows opens
 >    it, clamped to that monitor's work area. Controlled by the
 >    `MoveFlyoutKeyboardLayout` setting (on by default).
+>
+> 5. **The Notification Center opens beside the island from the first click.**
+>    Upstream moves the clock and calendar flyout as Explorer reveals it, and
+>    recognises it by its window title. On the first open after Explorer
+>    starts, the window is revealed before it has a size or that title, so it
+>    opened at the right edge of the screen. This fork also shifts the
+>    position Explorer computes for the flyout
+>    (`CActionCenterExperienceManager::GetViewPosition` in `twinui.pcshell.dll`),
+>    so every open lands where upstream's code puts the later ones. Follows
+>    the `MoveFlyoutNotificationCenter` and `NotificationCenterPrimaryOnly`
+>    settings.
 >
 > Everything else — the island auto-scaling, the WindhawkBlur engine, flyout
 > monitor resolution, the Y-above-taskbar clamp and Notification-Center
@@ -876,6 +887,34 @@ void LogInputSwitchPlacementToFileTai(PCWSTR monitorName,
            st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, monitorName,
            monitorDpi, anchor, anchorCenterXDip, originalX, x, y, cx, cy,
            cursorPos.x, cursorPos.y);
+  fclose(f);
+}
+// Fork addition: the Notification Center is also placed through Explorer's
+// GetViewPosition, the rect Explorer pushes to the flyout on every open, so
+// that gets its own line too. viewRect is the rect Windows computed; placedX is
+// where the hook moved its left edge. trayRight is the island tray's right edge
+// in monitor-relative DIPs.
+void LogNotificationCenterPlacementToFileTai(PCWSTR monitorName,
+                                             UINT monitorDpi,
+                                             int trayRightDip,
+                                             RECT const& viewRect,
+                                             int placedX) {
+  FILE* f = OpenPopupLogFileTai();
+  if (!f) {
+    return;
+  }
+  SYSTEMTIME st{};
+  GetLocalTime(&st);
+  POINT cursorPos{};
+  GetCursorPos(&cursorPos);
+  fwprintf(f,
+           L"%02d:%02d:%02d.%03d NotificationCenter monitor=%s monitorDpi=%u "
+           L"trayRight=%d viewRect=(x=%ld,y=%ld,cx=%ld,cy=%ld) placedX=%d "
+           L"cursor=(%ld,%ld)\n",
+           st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, monitorName,
+           monitorDpi, trayRightDip, viewRect.left, viewRect.top,
+           viewRect.right - viewRect.left, viewRect.bottom - viewRect.top,
+           placedX, cursorPos.x, cursorPos.y);
   fclose(f);
 }
 std::wstring GetMonitorName(HMONITOR monitor) {
@@ -9179,6 +9218,188 @@ static int PlaceInputSwitchFlyoutXTai(HWND hWnd,
                                    cx, cy);
   return newX;
 }
+// Fork addition: open the Notification Center -- the clock and calendar
+// flyout -- beside the island's tray on every open, including the first one
+// after Explorer starts.
+//
+// ShellExperienceHost draws that flyout, but Explorer places it. On every Show,
+// CActionCenterExperienceManager in twinui.pcshell.dll calls PositionView,
+// which takes the rect GetViewPosition computes -- right-anchored in the work
+// area of the monitor the flyout was opened on -- and pushes it to the window,
+// both directly and through ShellExperienceHost. The start button position
+// dependency only corrects the window when Explorer uncloaks it, and only once
+// its title reads "Notification Center". On the first open after Explorer
+// starts, the window is uncloaked while still 1x1 and untitled, and only then
+// moved to the screen edge, so that open stayed at the edge. Shifting the rect
+// GetViewPosition returns sends every push to the spot the uncloak correction
+// picks, so the two never disagree.
+//
+// twinui.pcshell.dll loads after this mod when Explorer starts, so the hook is
+// then installed from a thread that waits for the module.
+using CActionCenterExperienceManager_GetViewPosition_t =
+    long(WINAPI*)(void* pThis, RECT* rect);
+CActionCenterExperienceManager_GetViewPosition_t
+    CActionCenterExperienceManager_GetViewPosition_Original;
+// Mirrors the ShellExperienceHost branch of
+// dependencies/patches/startbuttonposition_start_menu_position_code.cpp, which
+// still runs at uncloak; keep the two in step. Only the horizontal position
+// changes, as there, and the same cases are left alone: a flyout that does not
+// hang from the top of its monitor (the y != 0 check there), and secondary
+// monitors under NotificationCenterPrimaryOnly.
+static void PlaceNotificationCenterViewRectTai(RECT* rect) {
+  if (g_unloading ||
+      !g_settings_startbuttonposition.MoveFlyoutNotificationCenter) {
+    return;
+  }
+  // Until the flyout reports its size, the first open asks for a zero-width
+  // rect at the monitor's edge. The next PositionView brings the width.
+  const int cx = rect->right - rect->left;
+  if (cx <= 0 || rect->bottom <= rect->top) {
+    return;
+  }
+  HMONITOR monitor = MonitorFromRect(rect, MONITOR_DEFAULTTONEAREST);
+  MONITORINFO monitorInfo{.cbSize = sizeof(MONITORINFO)};
+  if (!monitor || !GetMonitorInfoW(monitor, &monitorInfo)) {
+    return;
+  }
+  if (rect->top != monitorInfo.rcMonitor.top) {
+    return;
+  }
+  if (GetUserDefinedNotificationCenterPrimaryOnly() &&
+      !(monitorInfo.dwFlags & MONITORINFOF_PRIMARY)) {
+    return;
+  }
+  const std::wstring monitorName = GetMonitorName(monitor);
+  TaskbarFlyoutStateSnapshot taskbarState;
+  if (!TryGetTaskbarFlyoutStateSnapshot(monitorName, &taskbarState) ||
+      taskbarState.lastRightMostEdgeTray <= 0 ||
+      taskbarState.lastRootWidth <= 0.0f) {
+    Wh_Log(L"[NotificationCenter] No tray recorded for monitor %s",
+           monitorName.c_str());
+    return;
+  }
+  UINT monitorDpiX = 96;
+  UINT monitorDpiY = 96;
+  if (FAILED(GetDpiForMonitor(monitor, MDT_DEFAULT, &monitorDpiX,
+                              &monitorDpiY)) ||
+      monitorDpiX == 0) {
+    monitorDpiX = 96;
+  }
+  const float dpiScale = monitorDpiX / 96.0f;
+  const bool alignFlyoutInner = GetUserDefinedAlignFlyoutInner();
+  const int flyoutInnerPaddingPx = GetFlyoutInnerPaddingPx(dpiScale);
+  const float absRootWidth = taskbarState.lastRootWidth * dpiScale;
+  int localX = static_cast<int>(
+      taskbarState.lastRightMostEdgeTray * dpiScale -
+      (alignFlyoutInner ? (cx - flyoutInnerPaddingPx) : (cx / 2.0f)));
+  localX = std::max(0, std::min(localX, static_cast<int>(absRootWidth - cx)));
+  const int x = monitorInfo.rcMonitor.left + localX;
+  Wh_Log(L"[NotificationCenter] %s: X %ld -> %d (cx=%d)", monitorName.c_str(),
+         rect->left, x, cx);
+  LogNotificationCenterPlacementToFileTai(monitorName.c_str(), monitorDpiX,
+                                          taskbarState.lastRightMostEdgeTray,
+                                          *rect, x);
+  OffsetRect(rect, x - rect->left, 0);
+}
+long WINAPI CActionCenterExperienceManager_GetViewPosition_Hook(void* pThis,
+                                                                RECT* rect) {
+  g_hookCallCounter++;
+  const long result =
+      CActionCenterExperienceManager_GetViewPosition_Original(pThis, rect);
+  if (SUCCEEDED(result) && rect) {
+    try {
+      PlaceNotificationCenterViewRectTai(rect);
+    } catch (...) {
+      // Keep Windows' rect: an exception must not unwind into Explorer.
+    }
+  }
+  g_hookCallCounter--;
+  return result;
+}
+static bool HookNotificationCenterViewPositionTai(HMODULE twinuiPcshellModule) {
+  WindhawkUtils::SYMBOL_HOOK twinuiPcshellHooks[] = {
+      {{LR"(private: long __cdecl CActionCenterExperienceManager::GetViewPosition(struct tagRECT &))"},
+       &CActionCenterExperienceManager_GetViewPosition_Original,
+       CActionCenterExperienceManager_GetViewPosition_Hook},
+  };
+  const bool hooked = WindhawkUtils::HookSymbols(
+      twinuiPcshellModule, twinuiPcshellHooks, ARRAYSIZE(twinuiPcshellHooks));
+  Wh_Log(L"[NotificationCenter] GetViewPosition hook %s",
+         hooked ? L"set" : L"unavailable");
+  return hooked;
+}
+// A Win32 thread and event rather than std::thread: a std::thread still
+// joinable when this DLL's globals are destroyed at process exit would
+// terminate Explorer.
+static HANDLE g_notificationCenterHookWaitThread = nullptr;
+static HANDLE g_notificationCenterHookWaitStopEvent = nullptr;
+static bool g_notificationCenterHookPending = false;
+static DWORD WINAPI NotificationCenterHookWaitThreadTai(LPVOID) {
+  constexpr DWORD kPollIntervalMs = 250;
+  constexpr ULONGLONG kGiveUpAfterMs = 2 * 60 * 1000;
+  const ULONGLONG deadline = GetTickCount64() + kGiveUpAfterMs;
+  do {
+    if (HMODULE module = GetModuleHandleW(L"twinui.pcshell.dll")) {
+      // The first time, the symbols can take a while to download.
+      // StopNotificationCenterHookWaitTai waits for this thread, so the hook
+      // is never applied during unload.
+      if (HookNotificationCenterViewPositionTai(module) &&
+          WaitForSingleObject(g_notificationCenterHookWaitStopEvent, 0) ==
+              WAIT_TIMEOUT) {
+        Wh_ApplyHookOperations();
+      }
+      return 0;
+    }
+    if (GetTickCount64() >= deadline) {
+      Wh_Log(L"[NotificationCenter] twinui.pcshell.dll never loaded");
+      return 0;
+    }
+  } while (WaitForSingleObject(g_notificationCenterHookWaitStopEvent,
+                               kPollIntervalMs) == WAIT_TIMEOUT);
+  return 0;
+}
+// Wh_ModInit: hooks at once when the mod loads into a running Explorer, as
+// after compiling or enabling it; otherwise leaves the hook to the wait thread.
+static void HookNotificationCenterViewPositionIfLoadedTai() {
+  HMODULE module = GetModuleHandleW(L"twinui.pcshell.dll");
+  g_notificationCenterHookPending = !module;
+  if (module) {
+    HookNotificationCenterViewPositionTai(module);
+  }
+}
+// Wh_ModAfterInit.
+static void StartNotificationCenterHookWaitTai() {
+  if (!g_notificationCenterHookPending || g_notificationCenterHookWaitThread) {
+    return;
+  }
+  g_notificationCenterHookWaitStopEvent =
+      CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (!g_notificationCenterHookWaitStopEvent) {
+    return;
+  }
+  g_notificationCenterHookWaitThread = CreateThread(
+      nullptr, 0, NotificationCenterHookWaitThreadTai, nullptr, 0, nullptr);
+  if (!g_notificationCenterHookWaitThread) {
+    Wh_Log(L"[NotificationCenter] Failed to start the hook wait thread");
+    CloseHandle(g_notificationCenterHookWaitStopEvent);
+    g_notificationCenterHookWaitStopEvent = nullptr;
+  }
+}
+// Wh_ModBeforeUninit.
+static void StopNotificationCenterHookWaitTai() {
+  if (g_notificationCenterHookWaitStopEvent) {
+    SetEvent(g_notificationCenterHookWaitStopEvent);
+  }
+  if (g_notificationCenterHookWaitThread) {
+    WaitForSingleObject(g_notificationCenterHookWaitThread, INFINITE);
+    CloseHandle(g_notificationCenterHookWaitThread);
+    g_notificationCenterHookWaitThread = nullptr;
+  }
+  if (g_notificationCenterHookWaitStopEvent) {
+    CloseHandle(g_notificationCenterHookWaitStopEvent);
+    g_notificationCenterHookWaitStopEvent = nullptr;
+  }
+}
 bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorName) {
   if (!xamlRootContent) {
     Wh_Log(L"xamlRootContent is null");
@@ -10409,6 +10630,8 @@ BOOL Wh_ModInit() {
     UninitMinimizeAnimationCorrectionTai();
     return FALSE;
   }
+  // Fork addition: see CActionCenterExperienceManager_GetViewPosition_Hook.
+  HookNotificationCenterViewPositionIfLoadedTai();
   return TRUE;
 }
 void Wh_ModAfterInit() {
@@ -10422,11 +10645,15 @@ void Wh_ModAfterInit() {
   LoadSettingsStartButtonPosition();
   UpdateGlobalSettings();
   ScheduleInitialExplorerStyleApply();
+  // Fork addition: see CActionCenterExperienceManager_GetViewPosition_Hook.
+  StartNotificationCenterHookWaitTai();
 }
 void Wh_ModBeforeUninit() {
   if (g_PartialMode) {
     return;
   }
+  // Fork addition: see CActionCenterExperienceManager_GetViewPosition_Hook.
+  StopNotificationCenterHookWaitTai();
   g_unloading = true;
   CleanupDebounce();
   UninitMinimizeAnimationCorrectionTai();
