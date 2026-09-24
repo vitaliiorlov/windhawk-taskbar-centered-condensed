@@ -201,14 +201,11 @@ struct TaskbarState {
   float lastTargetOffsetY{0};
   float initOffsetX{-1};
   bool wasOverflowing{false};
-  // Fork addition: cached SetWindowRgn inputs (monitor-relative DIPs, already
-  // post island-scale) so SetWindowRgn is only called when the visible bounds
-  // actually change. lastRegionClear=true means the window currently has no
-  // region set, i.e. the full width is clickable.
-  float lastRegionX{-1.0f};
-  float lastRegionW{-1.0f};
+  // Fork addition: the bounds of the island clip ApplyStyle last set on the
+  // taskbar window (UpdateTaskbarWindowRegion), empty when none, and its corner
+  // radius in DIPs, which the window's region bounds cannot show a change of.
+  RECT lastRegionBox{};
   float lastRegionCorner{-1.0f};
-  bool lastRegionClear{true};
   uintptr_t lastOverflowButtonIdentity{0};
   bool overflowButtonSuppressionKnown{false};
   bool overflowButtonSuppressed{false};
@@ -261,6 +258,9 @@ struct TaskbarState {
   uint64_t lastDimensionInvalidationGeneration{0};
   TaskbarChildStyleCache taskbarChildStyleCache;
   TaskbarChildStyleCache trayChildStyleCache;
+  // Fork addition: COM identity of the taskbar XAML this state was built for.
+  // See GetOrCreateTaskbarState.
+  uintptr_t xamlRootIdentity{0};
 };
 struct TaskbarFlyoutStateSnapshot {
   float lastStartButtonXCalculated{0.0f};
@@ -286,11 +286,34 @@ bool IsTaskbarWindowClassTai(HWND window) {
   return _wcsicmp(className, L"Shell_TrayWnd") == 0 ||
          _wcsicmp(className, L"Shell_SecondaryTrayWnd") == 0;
 }
+// Fork addition: the monitor a taskbar belongs to. Explorer records it on every
+// taskbar window as the "TaskbarMonitor" property, which ApplySettingsTBIconSize
+// already reads for the DPI. MonitorFromWindow is no substitute: an auto-hidden
+// taskbar is parked almost entirely off its monitor, so with another monitor
+// below it (a laptop under an external screen, upstream issue #32) it names that
+// neighbour, and two taskbars get styled, and clipped, as one. The property can
+// outlive its monitor during a display change, hence the fallback.
+HMONITOR GetTaskbarMonitorTai(HWND taskbarWindow) {
+  if (!taskbarWindow) {
+    return nullptr;
+  }
+  HMONITOR monitor =
+      reinterpret_cast<HMONITOR>(GetPropW(taskbarWindow, L"TaskbarMonitor"));
+  MONITORINFO monitorInfo{.cbSize = sizeof(MONITORINFO)};
+  if (monitor && GetMonitorInfoW(monitor, &monitorInfo)) {
+    return monitor;
+  }
+  return MonitorFromWindow(taskbarWindow, MONITOR_DEFAULTTONEAREST);
+}
+// Fork addition: the taskbar window ApplyStyle is styling, set around the call
+// by ApplySettingsFromTaskbarThread. ApplyStyle is only handed the taskbar's
+// XAML, and UpdateTaskbarWindowRegion needs the window it belongs to.
+thread_local HWND g_applyStyleTaskbarWindowTai = nullptr;
 HMONITOR GetTaskbarMonitorFromPointTai(POINT point) {
   for (HWND window = WindowFromPoint(point); window;
        window = GetParent(window)) {
     if (IsTaskbarWindowClassTai(window)) {
-      return MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+      return GetTaskbarMonitorTai(window);
     }
   }
   struct EnumContext {
@@ -306,8 +329,7 @@ HMONITOR GetTaskbarMonitorFromPointTai(POINT point) {
         RECT rect{};
         if (GetWindowRect(window, &rect) &&
             PtInRect(&rect, context->point)) {
-          context->monitor =
-              MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+          context->monitor = GetTaskbarMonitorTai(window);
           return FALSE;
         }
         return TRUE;
@@ -343,8 +365,7 @@ void RecordTaskbarInvocationMonitorTai(HWND taskbarWindow, UINT message) {
   HMONITOR monitor =
       GetTaskbarMonitorFromPointTai(GetCurrentMessagePointTai());
   if (!monitor && taskbarWindow) {
-    monitor =
-        MonitorFromWindow(taskbarWindow, MONITOR_DEFAULTTONEAREST);
+    monitor = GetTaskbarMonitorTai(taskbarWindow);
   }
   if (!monitor) {
     return;
@@ -354,7 +375,72 @@ void RecordTaskbarInvocationMonitorTai(HWND taskbarWindow, UINT message) {
   g_recentTaskbarInvocationTime.store(GetTickCount64(),
                                       std::memory_order_release);
 }
-HMONITOR ResolveFlyoutMonitorTai(HWND flyoutWindow) {
+// Fork addition: the monitor a flyout window is laid out on, when all but a
+// sliver of it sits on one monitor.
+static HMONITOR GetFlyoutLayoutMonitorTai(HWND flyoutWindow) {
+  RECT windowRect{};
+  if (!flyoutWindow || !GetWindowRect(flyoutWindow, &windowRect)) {
+    return nullptr;
+  }
+  HMONITOR monitor = MonitorFromRect(&windowRect, MONITOR_DEFAULTTONULL);
+  MONITORINFO monitorInfo{.cbSize = sizeof(MONITORINFO)};
+  RECT overlap{};
+  if (!monitor || !GetMonitorInfoW(monitor, &monitorInfo) ||
+      !IntersectRect(&overlap, &windowRect, &monitorInfo.rcMonitor)) {
+    return nullptr;
+  }
+  const long long windowArea =
+      static_cast<long long>(windowRect.right - windowRect.left) *
+      (windowRect.bottom - windowRect.top);
+  const long long overlapArea =
+      static_cast<long long>(overlap.right - overlap.left) *
+      (overlap.bottom - overlap.top);
+  if (windowArea <= 0 || overlapArea * 10 < windowArea * 9) {
+    return nullptr;
+  }
+  return monitor;
+}
+// Fork addition: which flyout ResolveFlyoutMonitorTai is placing.
+enum class FlyoutKindTai { StartMenu, Search, NotificationCenter };
+static std::atomic<uintptr_t> g_lastStartMenuMonitorTai{0};
+static std::atomic<ULONGLONG> g_lastStartMenuTimeTai{0};
+// showing is false when the window is being hidden.
+HMONITOR ResolveFlyoutMonitorTai(HWND flyoutWindow, FlyoutKindTai kind,
+                                 bool showing) {
+  // Fork addition. The guesses further down take the monitor of a taskbar
+  // under the cursor. Search needs them: Windows opens it on the monitor the
+  // Start menu last used (SearchAppDesktopExperienceView asks the launcher),
+  // not the one whose Search button was clicked. The Start menu and the
+  // Notification Center must not have them. Windows lays those out for the
+  // monitor it opens them on, the Start menu across the whole width above the
+  // taskbar, and a Start menu opened with the Win key while the cursor rested
+  // over another monitor's taskbar was moved there with that layout and drawn
+  // part-way across it. They stay where Windows put them, and Search opening
+  // with the Start menu, as its search pane, goes with it.
+  constexpr ULONGLONG kStartMenuSearchPaneTtlMs = 500;
+  if (kind != FlyoutKindTai::Search) {
+    if (HMONITOR monitor = GetFlyoutLayoutMonitorTai(flyoutWindow)) {
+      if (kind == FlyoutKindTai::StartMenu && showing) {
+        g_lastStartMenuMonitorTai.store(reinterpret_cast<uintptr_t>(monitor),
+                                        std::memory_order_release);
+        g_lastStartMenuTimeTai.store(GetTickCount64(),
+                                     std::memory_order_release);
+      }
+      return monitor;
+    }
+  } else {
+    const ULONGLONG startMenuTime =
+        g_lastStartMenuTimeTai.load(std::memory_order_acquire);
+    const ULONGLONG now = GetTickCount64();
+    HMONITOR startMenuMonitor = reinterpret_cast<HMONITOR>(
+        g_lastStartMenuMonitorTai.load(std::memory_order_acquire));
+    MONITORINFO monitorInfo{.cbSize = sizeof(MONITORINFO)};
+    if (startMenuTime && now >= startMenuTime &&
+        now - startMenuTime <= kStartMenuSearchPaneTtlMs &&
+        startMenuMonitor && GetMonitorInfoW(startMenuMonitor, &monitorInfo)) {
+      return startMenuMonitor;
+    }
+  }
   constexpr DWORD kInvocationMessageTtlMs = 2500;
   const DWORD messageTime = static_cast<DWORD>(GetMessageTime());
   if (messageTime &&
@@ -381,11 +467,21 @@ HMONITOR ResolveFlyoutMonitorTai(HWND flyoutWindow) {
              ? MonitorFromWindow(flyoutWindow, MONITOR_DEFAULTTONEAREST)
              : nullptr;
 }
-std::shared_ptr<TaskbarState> GetOrCreateTaskbarState(const std::wstring& monitorName) {
+// Fork addition: xamlRootIdentity is the COM identity of the taskbar XAML being
+// styled. States are filed by monitor name, but the taskbar behind a name can
+// change: a monitor plugged back in gets a new taskbar, often under its old
+// name, and moving the primary display moves the primary taskbar onto another
+// monitor's name. Its state held the old taskbar's animation targets, and
+// with the same size and scale, nothing marked them stale, so the new
+// taskbar's island could be left where Windows put it. A taskbar the state was
+// not built for gets a fresh one.
+std::shared_ptr<TaskbarState> GetOrCreateTaskbarState(const std::wstring& monitorName,
+                                                      uintptr_t xamlRootIdentity) {
   std::lock_guard<std::mutex> lock(g_taskbarStatesMutex);
   auto& state = g_taskbarStates[monitorName];
-  if (!state) {
+  if (!state || state->xamlRootIdentity != xamlRootIdentity) {
     state = std::make_shared<TaskbarState>();
+    state->xamlRootIdentity = xamlRootIdentity;
   }
   return state;
 }
@@ -538,6 +634,7 @@ static FILE* OpenPopupLogFileTai() {
   }
   return f;
 }
+// windowsRect is where Windows had the window before the mod moved it.
 void LogFlyoutPlacementToFileTai(PCWSTR stage,
                                  PCWSTR monitorName,
                                  int target,
@@ -545,6 +642,7 @@ void LogFlyoutPlacementToFileTai(PCWSTR stage,
                                  UINT monitorDpiY,
                                  UINT windowDpiX,
                                  UINT windowDpiY,
+                                 RECT const& windowsRect,
                                  int x,
                                  int y,
                                  int cx,
@@ -563,12 +661,16 @@ void LogFlyoutPlacementToFileTai(PCWSTR stage,
   fwprintf(f,
            L"%02d:%02d:%02d.%03d %s monitor=%s target=%d "
            L"monitorDpi=%ux%u windowDpi=%ux%u "
+           L"windows=(x=%ld,y=%ld,cx=%ld,cy=%ld) "
            L"setPos=(x=%d,y=%d,cx=%d,cy=%d) cursor=(%ld,%ld) "
            L"tbState{startBtnX=%.2f rootW=%.2f targetW=%.2f}\n",
            st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, stage,
            monitorName, target, monitorDpiX, monitorDpiY, windowDpiX,
-           windowDpiY, x, y, cx, cy, cursorPos.x, cursorPos.y,
-           lastStartButtonXCalculated, lastRootWidth, lastTargetWidth);
+           windowDpiY, windowsRect.left, windowsRect.top,
+           windowsRect.right - windowsRect.left,
+           windowsRect.bottom - windowsRect.top, x, y, cx, cy, cursorPos.x,
+           cursorPos.y, lastStartButtonXCalculated, lastRootWidth,
+           lastTargetWidth);
   fclose(f);
 }
 // Fork addition: the keyboard layout (input switcher) flyout is placed by
@@ -666,10 +768,27 @@ void LogContextMenuPlacementToFileTai(PCWSTR menu,
            cursorPos.y);
   fclose(f);
 }
+// Fork addition: things the mod did to a taskbar window as a whole rather than
+// to a flyout: event names what happened, detail the specifics.
+void LogTaskbarEventToFileTai(PCWSTR event, PCWSTR detail) {
+  FILE* f = OpenPopupLogFileTai();
+  if (!f) {
+    return;
+  }
+  SYSTEMTIME st{};
+  GetLocalTime(&st);
+  fwprintf(f, L"%02d:%02d:%02d.%03d %s %s\n", st.wHour, st.wMinute,
+           st.wSecond, st.wMilliseconds, event, detail);
+  fclose(f);
+}
 // Fork addition: defined in win-dock-mod.cpp, called from the dependencies'
 // HookSystemTraySymbols and HookTaskbarViewDllSymbolsStartButtonPosition.
 bool HookTrayContextMenuPositionTai(HMODULE systemTrayModule);
 bool HookStartButtonContextMenuPositionTai(HMODULE taskbarViewModule);
+// Fork addition: defined in win-dock-mod.cpp, called from the dependencies'
+// ApplySettingsFromTaskbarThread.
+void RepairSecondaryTaskbarIslandTai(HWND taskbarWindow,
+                                     std::wstring const& monitorName);
 std::wstring GetMonitorName(HMONITOR monitor) {
     MONITORINFOEX monitorInfo = {};
     monitorInfo.cbSize = sizeof(MONITORINFOEX);

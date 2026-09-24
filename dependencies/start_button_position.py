@@ -21,6 +21,7 @@ class StartButtonPosition(URLProcessor):
         self._insert_custom_hooks(patch)
         self._patch_dwm_targeting(patch)
         self._patch_reload_and_settings(patch)
+        self._guard_taskbar_xaml_root_lookup(patch)
 
         return (
             patch.prepend(
@@ -217,9 +218,16 @@ class StartButtonPosition(URLProcessor):
         )
 
     def _patch_dwm_targeting(self, patch: CppPatcher) -> None:
+        resolve_monitor = (
+            "HMONITOR monitor = ResolveFlyoutMonitorTai(\n"
+            "        hwnd, target == DwmTarget::StartMenu    ? FlyoutKindTai::StartMenu\n"
+            "              : target == DwmTarget::SearchHost ? FlyoutKindTai::Search\n"
+            "                                                : FlyoutKindTai::NotificationCenter,\n"
+            "        !cloak);"
+        )
         patch.replace_literal(
             "HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);",
-            "HMONITOR monitor = ResolveFlyoutMonitorTai(hwnd);",
+            resolve_monitor,
             count=1,
             label="resolve flyout monitor from taskbar invocation",
         )
@@ -231,7 +239,7 @@ class StartButtonPosition(URLProcessor):
         # MONITOR_DPI_TYPE / MDT_DEFAULT / GetDpiForMonitor all come from the
         # taskbar-icon-size module, which is concatenated ahead of this one.
         patch.insert_after_literal(
-            "HMONITOR monitor = ResolveFlyoutMonitorTai(hwnd);",
+            resolve_monitor,
             """
     UINT monitorDpiX = 96;
     UINT monitorDpiY = 96;
@@ -308,6 +316,56 @@ class StartButtonPosition(URLProcessor):
         )
         patch.remove_literal("margin.Right = 0;")
         patch.remove_literal("margin.Right = -width;")
+
+    def _guard_taskbar_xaml_root_lookup(self, patch: CppPatcher) -> None:
+        # Fork addition. Upstream reads a taskbar's XAML root through Explorer's
+        # objects without checking that they exist yet. It only does so when its
+        # settings change, but this mod does it on nearly every taskbar message,
+        # including during a display change, when a secondary taskbar can have a
+        # TaskbarHost but no frame yet (TaskbarHost::FrameHeight checks for
+        # that too). Reading through the missing frame crashed Explorer
+        # (0xC0000005, TrayUI::_StuckTrayChange on the stack), which in turn
+        # restarts every taskbar.
+        signature = "XamlRoot XamlRootFromTaskbarHostSharedPtr(void* taskbarHostSharedPtr[2])"
+        patch.insert_before_literal(
+            "auto* taskbarElementIUnknown =",
+            "if (!taskbarHostSharedPtr[0]) {\n"
+            "        std__Ref_count_base__Decref_Original(taskbarHostSharedPtr[1]);\n"
+            "        return nullptr;\n"
+            "    }\n    ",
+            in_function=signature,
+            label="guard a TaskbarHost pointer that is null",
+        )
+        patch.insert_before_literal(
+            "FrameworkElement taskbarElement = nullptr;",
+            "if (!taskbarElementIUnknown) {\n"
+            "        std__Ref_count_base__Decref_Original(taskbarHostSharedPtr[1]);\n"
+            "        return nullptr;\n"
+            "    }\n    ",
+            in_function=signature,
+            label="guard a TaskbarHost without a frame",
+        )
+        patch.replace_literal(
+            "auto result = taskbarElement ? taskbarElement.XamlRoot() : nullptr;",
+            "XamlRoot result = nullptr;\n"
+            "    try {\n"
+            "        result = taskbarElement ? taskbarElement.XamlRoot() : nullptr;\n"
+            "    } catch (...) {\n"
+            "    }",
+            count=1,
+            in_function=signature,
+            label="catch a frame whose XAML is being torn down",
+        )
+        for lookup in (
+            "XamlRoot GetTaskbarXamlRoot(HWND hTaskbarWnd)",
+            "XamlRoot GetSecondaryTaskbarXamlRoot(HWND hSecondaryTaskbarWnd)",
+        ):
+            patch.insert_after_literal(
+                "void* taskBand = (void*)GetWindowLongPtr(hTaskSwWnd, 0);",
+                "\n    if (!taskBand) {\n        return nullptr;\n    }",
+                in_function=lookup,
+                label="guard a task band window without its object",
+            )
 
     def _patch_reload_and_settings(self, patch: CppPatcher) -> None:
         patch.disable_function_at_start(
