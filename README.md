@@ -18,7 +18,7 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >
 > Upstream: [DarkionAvey/windhawk-taskbar-centered-condensed](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed).
 > This fork ([vitaliiorlov/windhawk-taskbar-centered-condensed](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed))
-> tracks upstream closely and adds five things on top.
+> tracks upstream closely and adds six things on top.
 >
 > ### What's different from upstream
 >
@@ -60,6 +60,16 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    so every open lands where upstream's code puts the later ones. Follows
 >    the `MoveFlyoutNotificationCenter` and `NotificationCenterPrimaryOnly`
 >    settings.
+>
+> 6. **The tray icons' right-click menus open beside the island.**
+>    Right-clicking the clock or a system icon (network, volume, battery,
+>    language) opens a menu that Windows anchors to the right edge of the
+>    screen, where the tray ends on a stock taskbar. This fork moves that
+>    anchor as far as the Notification Center moves
+>    (`ContextMenuPositionHelper` in `SystemTray.dll`), so the menus line up
+>    with it at the island's right end, and checks the menu's position once
+>    it has opened. Controlled by the `MoveTrayContextMenus` setting (on by
+>    default); follows `AlignFlyoutInner`.
 >
 > Everything else — the island auto-scaling, the WindhawkBlur engine, flyout
 > monitor resolution, the Y-above-taskbar clamp and Notification-Center
@@ -168,3 +178,4 @@ Huge thanks to these awesome developers who made this mod possible -- your contr
 | `AlignFlyoutInner` | Align flyout windows to the inside of the taskbar | When enabled, the flyout windows will be aligned within the bounds of the taskbar. When off, they will be 50% inside the taskbar bounds. Default is on. | Boolean (true/false) |
 | `NotificationCenterPrimaryOnly` | Notification Center on primary monitor only | When enabled, the Notification Center (the clock/calendar popup) is only repositioned when opened on the primary monitor. On secondary monitors it appears at Windows' native default position. Only affects the Notification Center - Start Menu, Search and Control Center are unaffected. Default is off. | Boolean (true/false) |
 | `MoveFlyoutKeyboardLayout` | Move keyboard layout flyout with Taskbar | When enabled, the keyboard layout flyout (opened by clicking the language indicator or pressing Win+Space) is centered above the language indicator on the taskbar instead of at the right edge of the screen. On a monitor whose taskbar has no language indicator it is centered above the tray instead. Default is on. | Boolean (true/false) |
+| `MoveTrayContextMenus` | Move tray icon menus with Taskbar | When enabled, the right-click menus of the clock and the system tray icons (network, volume, battery, language) open at the right end of the taskbar, lined up with the Notification Center, instead of at the right edge of the screen. Follows "Align flyout windows to the inside of the taskbar". Default is on. | Boolean (true/false) |

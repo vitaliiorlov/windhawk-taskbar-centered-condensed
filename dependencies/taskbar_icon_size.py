@@ -193,6 +193,13 @@ class TaskbarIconSizeMod(URLProcessor):
                 "\n" + read_patch("tbiconsize_grouping_mode_hook_install.cpp"),
                 in_function="bool HookTaskbarViewDllSymbols(HMODULE module, bool hookSystemTraySymbolsInline)",
             )
+            # Fork addition: the tray right-click menu hooks (win-dock-mod.cpp)
+            # ride on this module's SystemTray.dll load handling.
+            .insert_before_literal(
+                "return true;",
+                "HookTrayContextMenuPositionTai(module);\n    ",
+                in_function="bool HookSystemTraySymbols(HMODULE module)",
+            )
             .insert_after_literal(
                 "g_inSystemTrayController_UpdateFrameSize = false;",
                 "ApplySettingsFromTaskbarThreadGeometryChanged();",

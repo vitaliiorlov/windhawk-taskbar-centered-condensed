@@ -188,3 +188,8 @@
   $name: Move keyboard layout flyout with Taskbar
   $description: When enabled, the keyboard layout flyout (opened by clicking the language indicator or pressing Win+Space) is centered above the language indicator on the taskbar instead of at the right edge of the screen. On a monitor whose taskbar has no language indicator it is centered above the tray instead. Default is on.
   $type: bool
+
+- MoveTrayContextMenus: true
+  $name: Move tray icon menus with Taskbar
+  $description: When enabled, the right-click menus of the clock and the system tray icons (network, volume, battery, language) open at the right end of the taskbar, lined up with the Notification Center, instead of at the right edge of the screen. Follows "Align flyout windows to the inside of the taskbar". Default is on.
+  $type: bool
