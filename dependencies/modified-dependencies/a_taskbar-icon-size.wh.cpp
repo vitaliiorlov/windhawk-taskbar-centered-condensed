@@ -629,6 +629,40 @@ void LogNotificationCenterPlacementToFileTai(PCWSTR monitorName,
            placedX, cursorPos.x, cursorPos.y);
   fclose(f);
 }
+// Fork addition: the tray icons' right-click menus, two lines per open. Stage
+// "anchor" is the point the menu's right edge goes to: windowsX is Windows'
+// (the taskbar's corner), placedX the moved one. Stages "moved" and "kept"
+// follow once the menu has opened: windowsX is the left edge XAML gave it,
+// placedX where it ended up. All values are root-relative DIPs, which on a
+// horizontal taskbar are monitor-relative.
+void LogTrayContextMenuPlacementToFileTai(PCWSTR stage,
+                                          PCWSTR monitorName,
+                                          int trayRightDip,
+                                          float rootWidthDip,
+                                          float marginDip,
+                                          float menuWidthDip,
+                                          float windowsX,
+                                          float placedX) {
+  FILE* f = OpenPopupLogFileTai();
+  if (!f) {
+    return;
+  }
+  SYSTEMTIME st{};
+  GetLocalTime(&st);
+  POINT cursorPos{};
+  GetCursorPos(&cursorPos);
+  fwprintf(f,
+           L"%02d:%02d:%02d.%03d TrayContextMenu %s monitor=%s trayRight=%d "
+           L"rootW=%.2f margin=%.2f menuW=%.2f windowsX=%.2f placedX=%.2f "
+           L"cursor=(%ld,%ld)\n",
+           st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, stage,
+           monitorName, trayRightDip, rootWidthDip, marginDip, menuWidthDip,
+           windowsX, placedX, cursorPos.x, cursorPos.y);
+  fclose(f);
+}
+// Fork addition: defined in win-dock-mod.cpp, called from the dependency's
+// HookSystemTraySymbols.
+bool HookTrayContextMenuPositionTai(HMODULE systemTrayModule);
 std::wstring GetMonitorName(HMONITOR monitor) {
     MONITORINFOEX monitorInfo = {};
     monitorInfo.cbSize = sizeof(MONITORINFOEX);
@@ -2648,6 +2682,7 @@ bool HookSystemTraySymbols(HMODULE module) {
             SystemTrayController_UpdateFrameSize_Hook,
             &SystemTrayController_UpdateFrameSize_Original);
     }
+    HookTrayContextMenuPositionTai(module);
     return true;
 }
 bool HookTaskbarViewDllSymbols(HMODULE module,
