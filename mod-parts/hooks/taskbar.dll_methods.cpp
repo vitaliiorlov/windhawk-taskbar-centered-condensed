@@ -179,12 +179,15 @@ __int64 WINAPI CTraySearchControl__WndProc_Hook(void* pThis, void* pHwnd, unsign
 }
 interface ITaskGroup;
 interface ITaskItem;
-using CTaskBand__UpdateItemIcon_WithArgs_t = void(WINAPI*)(void* pThis, ITaskGroup* param1, ITaskItem* param2);
+// iconVariants was added in Windows 11 build 26100.9549. On older builds the
+// hook is bound to the two-argument function instead; the extra argument then
+// only carries whatever is left in its register, and the original ignores it.
+using CTaskBand__UpdateItemIcon_WithArgs_t = void(WINAPI*)(void* pThis, ITaskGroup* param1, ITaskItem* param2, void* iconVariants);
 CTaskBand__UpdateItemIcon_WithArgs_t CTaskBand__UpdateItemIcon_WithArgs_Original;
-void WINAPI CTaskBand__UpdateItemIcon_WithArgs_Hook(void* pThis, ITaskGroup* param1, ITaskItem* param2) {
+void WINAPI CTaskBand__UpdateItemIcon_WithArgs_Hook(void* pThis, ITaskGroup* param1, ITaskItem* param2, void* iconVariants) {
   Wh_Log(L"Method called: CTaskBand__UpdateItemIcon");
   if (CTaskBand__UpdateItemIcon_WithArgs_Original) {
-    CTaskBand__UpdateItemIcon_WithArgs_Original(pThis, param1, param2);
+    CTaskBand__UpdateItemIcon_WithArgs_Original(pThis, param1, param2, iconVariants);
   }
   ApplySettingsFromTaskbarThreadIfRequired();
 }
