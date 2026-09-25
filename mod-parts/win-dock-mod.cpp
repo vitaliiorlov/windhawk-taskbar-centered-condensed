@@ -793,9 +793,9 @@ static void InitMinimizeAnimationCorrectionTai() {
   if (user32) {
     auto sendMessageW = reinterpret_cast<SendMessageW_t>(GetProcAddress(user32, "SendMessageW"));
     if (sendMessageW) {
-      if (WindhawkUtils::Wh_SetFunctionHookT(sendMessageW,
-                                             SendMessageW_HookTai,
-                                             &SendMessageW_OriginalTai)) {
+      if (WindhawkUtils::SetFunctionHook(sendMessageW,
+                                         SendMessageW_HookTai,
+                                         &SendMessageW_OriginalTai)) {
         Wh_Log(L"[MinRectFix] Successfully hooked SendMessageW");
       } else {
         Wh_Log(L"[MinRectFix] Failed to hook SendMessageW");
@@ -5791,7 +5791,7 @@ BOOL Wh_ModInit() {
   if (moduleUser32) {
     auto pSetWindowPos = (SetWindowPos_t)GetProcAddress(moduleUser32, "SetWindowPos");
     if (pSetWindowPos) {
-      if (WindhawkUtils::Wh_SetFunctionHookT(pSetWindowPos, SetWindowPos_Hook, &SetWindowPos_Original)) {
+      if (WindhawkUtils::SetFunctionHook(pSetWindowPos, SetWindowPos_Hook, &SetWindowPos_Original)) {
         Wh_Log(L"Successfully hooked SetWindowPos");
       } else {
         Wh_Log(L"Failed to hook SetWindowPos");
