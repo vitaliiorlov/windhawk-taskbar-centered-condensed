@@ -2,7 +2,7 @@
 // @id              taskbar-dock-like
 // @name            TAI (taskbar as island) for Windows 11 - vo fork
 // @description     Centers and floats the taskbar as an animated dock. Fork changes are listed under Details.
-// @version         1.5.268-vo
+// @version         1.5.269-vo
 // @author          vitaliiorlov (fork of DarkionAvey)
 // @github          https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed
 // @include         explorer.exe
@@ -434,8 +434,6 @@ constexpr int kDefaultTaskbarHeight = 74;
 constexpr int kDefaultTaskbarIconSize = 42;
 constexpr int kDefaultTaskbarButtonSize = 74;
 constexpr int kDefaultTaskbarOffsetY = 6;
-constexpr int kDefaultTrayIconSize = 15;
-constexpr int kDefaultTrayButtonSize = 30;
 constexpr int kSystemSmallTaskbarIconSize = 16;
 constexpr int kSystemMediumTaskbarIconSize = 24;
 constexpr int kSystemSmallTaskbarButtonSize = 32;
@@ -449,9 +447,6 @@ constexpr int kMaxTaskbarIconSize = 300;
 constexpr int kMinTrayIconSize = 15;
 constexpr int kMinTrayButtonSize = 20;
 constexpr double kLayoutToleranceDip = 0.5;
-constexpr int kWorkerShutdownPollMs = 10;
-constexpr int kDelayedApplyWorkerShutdownTimeoutMs = 5000;
-constexpr int kAnimationFollowupWorkerShutdownTimeoutMs = 2000;
 constexpr int kTaskbarMeasurePollIntervalMs = 100;
 constexpr int kTaskbarMeasureOverrideTimeoutMs = 10000;
 constexpr int kHookDrainPollIntervalMs = 100;
@@ -3491,7 +3486,7 @@ bool HookTaskbarViewDllSymbols(HMODULE module,
     }
     if (TaskbarController_OnGroupingModeChanged_Original) {
         TaskbarController_OnGroupingModeChanged_InitOffsets();
-WindhawkUtils::Wh_SetFunctionHookT(
+WindhawkUtils::SetFunctionHook(
             reinterpret_cast<TaskbarController_OnGroupingModeChanged_t>(
                 TaskbarController_OnGroupingModeChanged_Original),
             TaskbarController_OnGroupingModeChanged_Hook,
@@ -5754,7 +5749,6 @@ using namespace winrt::Windows::UI::Xaml;
 #include <cmath>
 #include <d2d1_1.h>
 #include <d2d1effects.h>
-#include <list>
 #include <winrt/Windows.Graphics.Effects.h>
 #include <winrt/Windows.System.Power.h>
 #include <winrt/Windows.UI.ViewManagement.h>
@@ -7056,9 +7050,9 @@ static void InitMinimizeAnimationCorrectionTai() {
   if (user32) {
     auto sendMessageW = reinterpret_cast<SendMessageW_t>(GetProcAddress(user32, "SendMessageW"));
     if (sendMessageW) {
-      if (WindhawkUtils::Wh_SetFunctionHookT(sendMessageW,
-                                             SendMessageW_HookTai,
-                                             &SendMessageW_OriginalTai)) {
+      if (WindhawkUtils::SetFunctionHook(sendMessageW,
+                                         SendMessageW_HookTai,
+                                         &SendMessageW_OriginalTai)) {
         Wh_Log(L"[MinRectFix] Successfully hooked SendMessageW");
       } else {
         Wh_Log(L"[MinRectFix] Failed to hook SendMessageW");
@@ -11789,7 +11783,7 @@ BOOL Wh_ModInit() {
   if (moduleUser32) {
     auto pSetWindowPos = (SetWindowPos_t)GetProcAddress(moduleUser32, "SetWindowPos");
     if (pSetWindowPos) {
-      if (WindhawkUtils::Wh_SetFunctionHookT(pSetWindowPos, SetWindowPos_Hook, &SetWindowPos_Original)) {
+      if (WindhawkUtils::SetFunctionHook(pSetWindowPos, SetWindowPos_Hook, &SetWindowPos_Original)) {
         Wh_Log(L"Successfully hooked SetWindowPos");
       } else {
         Wh_Log(L"Failed to hook SetWindowPos");
