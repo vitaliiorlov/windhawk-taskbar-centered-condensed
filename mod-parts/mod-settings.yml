@@ -203,3 +203,8 @@
   $name: Show an auto-hidden taskbar only from under it
   $description: When the taskbar hides automatically, it comes back only when the mouse reaches the screen edge under the taskbar, instead of anywhere along that edge. The rest of the edge is left to the windows behind it. Default is on.
   $type: bool
+
+- LogFlyoutPlacement: false
+  $name: Log flyout placement to a file
+  $description: When enabled, a line is added to windhawk_popup_log.txt in %TEMP% each time the Start menu, Search, a flyout or a taskbar menu is placed, to help diagnose placement bugs. At 1 MB the file is renamed windhawk_popup_log.old.txt and a new one is started. Default is off.
+  $type: bool

@@ -54,12 +54,14 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    an on/off toggle for the Notification Center but nothing that scopes it by
 >    monitor.
 >
-> 3. **Flyout placement is mirrored to a log file.**
->    One line per flyout open, appended to `windhawk_popup_log.txt` under
->    `%TEMP%`, so multi-monitor and mixed-DPI placement can be diagnosed
->    without attaching DebugView. The Start menu, Search and Notification
->    Center lines show where Windows put the window and where it was moved;
->    repairs to a taskbar (see 11) are logged there too.
+> 3. **Flyout placement can be mirrored to a log file.**
+>    With the `LogFlyoutPlacement` setting on (off by default), one line per
+>    flyout open is appended to `windhawk_popup_log.txt` under `%TEMP%`, so
+>    multi-monitor and mixed-DPI placement can be diagnosed without attaching
+>    DebugView. The Start menu, Search and Notification Center lines show
+>    where Windows put the window and where it was moved; repairs to a taskbar
+>    (see 11) are logged there too. At 1 MB the file is renamed
+>    `windhawk_popup_log.old.txt` and a new one is started.
 >
 > 4. **The keyboard layout flyout opens above the language indicator.**
 >    Clicking the language indicator (or pressing Win+Space) opens a flyout
@@ -166,6 +168,32 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >     so it follows the taskbar height, icon size and button size settings at
 >     any display scale. The progress bar some apps show on their button gets
 >     the same move.
+>
+> 13. **Start no longer freezes waiting on a flyout.**
+>     Start could freeze until Explorer was restarted, mostly on opening
+>     Settings from it. Just before Explorer shows the Start menu, Search or
+>     the Notification Center, the mod moves the window, which belongs to
+>     another process, and `SetWindowPos` waits, with no time limit, for that
+>     process to handle the move. When it didn't, for example while it was
+>     suspended, the Explorer thread that shows Start and launches apps was
+>     stuck with it. The fork now queues the move, as Windows does for these
+>     windows, and gives the flyout at most 250 ms to catch up before it is
+>     shown. Builds since September 2026 also moved each flyout as it hid, to
+>     where it already was, on every Start close and app launch; hiding
+>     flyouts are left alone again, as in upstream TAI. And the mod's
+>     `SetWindowPos` hook, which sees every window move in Explorer, now
+>     reads settings and process names only for the windows it changes.
+>
+> 14. **Explorer's helper processes no longer crash on exit.**
+>     Explorer starts short-lived helper processes, for example to open an
+>     app from `shell:AppsFolder` or to host folder windows, and the mod
+>     loaded into each one. A `std::thread` still joinable at exit ends the
+>     process with `std::terminate`, so every helper exit was logged as a
+>     crash: about 200 `Application Error` events a month for `explorer.exe`,
+>     module `libc++.whl`, code `0x40000015`, each with a crash dump. The
+>     shell itself was not affected. The mod's worker threads are now plain
+>     Windows threads, and a helper started with arguments while another
+>     Explorer owns the taskbar skips the mod altogether.
 >
 > Everything else — the island auto-scaling, the WindhawkBlur engine, the
 > Y-above-taskbar clamp and Notification-Center detection — is upstream's
@@ -281,3 +309,4 @@ modify the source files in the `mod-parts` directory.
 | `MoveTrayContextMenus` | Move tray icon menus with Taskbar | When enabled, the right-click menus of the clock and the system tray icons (network, volume, battery, language) open at the right end of the taskbar, lined up with the Notification Center, instead of at the right edge of the screen. Default is on. | Boolean (true/false) |
 | `StartMenuOnActiveMonitor` | Open Start on the monitor in use | When enabled, the Start menu opened with the Win key (or Ctrl+Esc) opens on the monitor of the window you are working in, or the one under the mouse when the desktop or a taskbar has focus, instead of always on the main display. A taskbar's Start button already opens it on that taskbar's monitor. Only monitors with a taskbar are used. Default is on. | Boolean (true/false) |
 | `AutoHideShowUnderTaskbarOnly` | Show an auto-hidden taskbar only from under it | When the taskbar hides automatically, it comes back only when the mouse reaches the screen edge under the taskbar, instead of anywhere along that edge. The rest of the edge is left to the windows behind it. Default is on. | Boolean (true/false) |
+| `LogFlyoutPlacement` | Log flyout placement to a file | When enabled, a line is added to windhawk_popup_log.txt in %TEMP% each time the Start menu, Search, a flyout or a taskbar menu is placed, to help diagnose placement bugs. At 1 MB the file is renamed windhawk_popup_log.old.txt and a new one is started. Default is off. | Boolean (true/false) |
