@@ -55,7 +55,6 @@ using namespace winrt::Windows::UI::Xaml;
 #include <cmath>
 #include <d2d1_1.h>
 #include <d2d1effects.h>
-#include <list>
 #include <winrt/Windows.Graphics.Effects.h>
 #include <winrt/Windows.System.Power.h>
 #include <winrt/Windows.UI.ViewManagement.h>

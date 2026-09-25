@@ -53,8 +53,6 @@ constexpr int kDefaultTaskbarHeight = 74;
 constexpr int kDefaultTaskbarIconSize = 42;
 constexpr int kDefaultTaskbarButtonSize = 74;
 constexpr int kDefaultTaskbarOffsetY = 6;
-constexpr int kDefaultTrayIconSize = 15;
-constexpr int kDefaultTrayButtonSize = 30;
 constexpr int kSystemSmallTaskbarIconSize = 16;
 constexpr int kSystemMediumTaskbarIconSize = 24;
 constexpr int kSystemSmallTaskbarButtonSize = 32;
@@ -68,9 +66,6 @@ constexpr int kMaxTaskbarIconSize = 300;
 constexpr int kMinTrayIconSize = 15;
 constexpr int kMinTrayButtonSize = 20;
 constexpr double kLayoutToleranceDip = 0.5;
-constexpr int kWorkerShutdownPollMs = 10;
-constexpr int kDelayedApplyWorkerShutdownTimeoutMs = 5000;
-constexpr int kAnimationFollowupWorkerShutdownTimeoutMs = 2000;
 constexpr int kTaskbarMeasurePollIntervalMs = 100;
 constexpr int kTaskbarMeasureOverrideTimeoutMs = 10000;
 constexpr int kHookDrainPollIntervalMs = 100;
@@ -156,6 +151,7 @@ struct ModSettings {
   std::vector<std::wregex> compiledDividedAppPatterns;
   bool userDefinedAlignFlyoutInner;
   bool userDefinedNotificationCenterPrimaryOnly;
+  bool userDefinedAutoHideShowUnderTaskbarOnly;
   bool userDefinedCustomizeTaskbarBackground;
   bool userDefinedDisableCustomBlurBackground;
   double userDefinedAppsDividerThickness;
@@ -174,6 +170,11 @@ bool GetUserDefinedAlignFlyoutInner() {
 bool GetUserDefinedNotificationCenterPrimaryOnly() {
   std::lock_guard<std::recursive_mutex> lock(g_settingsMutex);
   return g_settings.userDefinedNotificationCenterPrimaryOnly;
+}
+// Fork addition: see TaskbarRevealZoneTai.
+bool GetUserDefinedAutoHideShowUnderTaskbarOnly() {
+  std::lock_guard<std::recursive_mutex> lock(g_settingsMutex);
+  return g_settings.userDefinedAutoHideShowUnderTaskbarOnly;
 }
 #include <cstdint>
 #include <cstdio>
@@ -3104,7 +3105,7 @@ bool HookTaskbarViewDllSymbols(HMODULE module,
     }
     if (TaskbarController_OnGroupingModeChanged_Original) {
         TaskbarController_OnGroupingModeChanged_InitOffsets();
-WindhawkUtils::Wh_SetFunctionHookT(
+WindhawkUtils::SetFunctionHook(
             reinterpret_cast<TaskbarController_OnGroupingModeChanged_t>(
                 TaskbarController_OnGroupingModeChanged_Original),
             TaskbarController_OnGroupingModeChanged_Hook,
