@@ -156,6 +156,7 @@ struct ModSettings {
   std::vector<std::wregex> compiledDividedAppPatterns;
   bool userDefinedAlignFlyoutInner;
   bool userDefinedNotificationCenterPrimaryOnly;
+  bool userDefinedAutoHideShowUnderTaskbarOnly;
   bool userDefinedCustomizeTaskbarBackground;
   bool userDefinedDisableCustomBlurBackground;
   double userDefinedAppsDividerThickness;
@@ -174,6 +175,11 @@ bool GetUserDefinedAlignFlyoutInner() {
 bool GetUserDefinedNotificationCenterPrimaryOnly() {
   std::lock_guard<std::recursive_mutex> lock(g_settingsMutex);
   return g_settings.userDefinedNotificationCenterPrimaryOnly;
+}
+// Fork addition: see TaskbarRevealZoneTai.
+bool GetUserDefinedAutoHideShowUnderTaskbarOnly() {
+  std::lock_guard<std::recursive_mutex> lock(g_settingsMutex);
+  return g_settings.userDefinedAutoHideShowUnderTaskbarOnly;
 }
 #include <cstdint>
 #include <cstdio>
