@@ -1328,6 +1328,9 @@ HRESULT WINAPI DwmSetWindowAttribute_Hook(HWND hwnd,
     }
     BOOL cloak = *(BOOL*)pvAttribute;
     Wh_Log(L"> %08X %s", (DWORD)(DWORD_PTR)hwnd, cloak ? L"cloak" : L"uncloak");
+    if (cloak) {
+        return original();
+    }
     DWORD processId = 0;
     if (!hwnd || !GetWindowThreadProcessId(hwnd, &processId)) {
         return original();
@@ -1359,8 +1362,7 @@ HRESULT WINAPI DwmSetWindowAttribute_Hook(HWND hwnd,
     HMONITOR monitor = ResolveFlyoutMonitorTai(
         hwnd, target == DwmTarget::StartMenu    ? FlyoutKindTai::StartMenu
               : target == DwmTarget::SearchHost ? FlyoutKindTai::Search
-                                                : FlyoutKindTai::NotificationCenter,
-        !cloak);
+                                                : FlyoutKindTai::NotificationCenter);
     UINT monitorDpiX = 96;
     UINT monitorDpiY = 96;
     if (!monitor ||
@@ -1504,7 +1506,7 @@ LogFlyoutPlacementToFileTai(L"Recalc", monitorName.c_str(), static_cast<int>(tar
                             taskbarState.lastStartButtonXCalculated,
                             taskbarState.lastRootWidth,
                             taskbarState.lastTargetWidth);
-SetWindowPos(hwnd, nullptr, x, y, cx, cy, SWP_NOZORDER | SWP_NOACTIVATE);
+MoveFlyoutWindowTai(hwnd, x, y, cx, cy);
     return original();
 }
 namespace StartMenuUI {
