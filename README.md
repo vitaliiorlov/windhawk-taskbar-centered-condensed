@@ -30,7 +30,9 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    settings" menu) land on the empty strips either side. This fork uses
 >    `SetWindowRgn` so the OS only routes mouse input to pixels inside the
 >    island. The clip is driven by the post-scale island bounds, so it tracks
->    the island when upstream shrinks it on overflow. While an auto-hidden
+>    the island when upstream shrinks it on overflow, and reaches a pixel past
+>    each end of the island, whose edges seldom fall on a pixel boundary, so
+>    the border is never cut off at any display scale. While an auto-hidden
 >    taskbar is off screen the clip keeps to the island's width, so only the
 >    edge under the island brings it back (see 7). Also proposed upstream as
 >    [PR #19](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/pull/19).

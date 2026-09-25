@@ -3475,9 +3475,16 @@ bool UpdateTaskbarWindowRegion(HWND taskbarWindow,
     return false;
   }
   const float scale = rasterizationScale > 0.0f ? rasterizationScale : 1.0f;
-  int x1 = static_cast<int>(std::lround(visibleXDip * scale));
+  // Fork addition: the clip reaches one pixel past each edge of the island.
+  // The island's edges seldom fall on a pixel boundary: its width is drawn
+  // unrounded, and scaled when the island shrinks on overflow. The pixel an
+  // edge falls in holds the outer column of the island's border, while the
+  // edges handed in here are rounded to whole pixels, up to a pixel away. So
+  // the nearest pixel alone cut the border off the right end about half the
+  // time, at any display scale.
+  int x1 = static_cast<int>(std::lround(visibleXDip * scale)) - 1;
   int x2 = static_cast<int>(
-      std::lround((visibleXDip + visibleWidthDip) * scale));
+      std::lround((visibleXDip + visibleWidthDip) * scale)) + 1;
   if (x1 < 0) x1 = 0;
   if (x2 > wndW) x2 = wndW;
   const bool onMonitor = IsTaskbarWindowOnItsMonitorTai(taskbarWindow, wnd);
@@ -3519,9 +3526,11 @@ bool UpdateTaskbarWindowRegion(HWND taskbarWindow,
   if (TakeTaskbarRevealZoneAppliedTai(taskbarWindow)) {
     force = true;
   }
-  if (!force && hasOwnRegion && std::abs(current.left - x1) <= 1 &&
-      std::abs(current.right - x2) <= 1 &&
-      std::abs(current.bottom - wndH) <= 1) {
+  // Fork addition: compared exactly, since a tolerance let a clip a pixel
+  // short of the island stay. A rounded region's bounds are exactly the
+  // rectangle it was made from.
+  if (!force && hasOwnRegion && current.left == x1 && current.right == x2 &&
+      current.bottom == wndH) {
     return true;
   }
   int cr = static_cast<int>(std::lround(cornerRadiusDip * scale));
