@@ -2,7 +2,7 @@
 // @id              taskbar-dock-like
 // @name            TAI (taskbar as island) for Windows 11 - vo fork
 // @description     Centers and floats the taskbar as an animated dock. Fork changes are listed under Details.
-// @version         1.5.267-vo
+// @version         1.5.268-vo
 // @author          vitaliiorlov (fork of DarkionAvey)
 // @github          https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed
 // @include         explorer.exe
@@ -42,7 +42,9 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    settings" menu) land on the empty strips either side. This fork uses
 >    `SetWindowRgn` so the OS only routes mouse input to pixels inside the
 >    island. The clip is driven by the post-scale island bounds, so it tracks
->    the island when upstream shrinks it on overflow. While an auto-hidden
+>    the island when upstream shrinks it on overflow, and reaches a pixel past
+>    each end of the island, whose edges seldom fall on a pixel boundary, so
+>    the border is never cut off at any display scale. While an auto-hidden
 >    taskbar is off screen the clip keeps to the island's width, so only the
 >    edge under the island brings it back (see 7). Also proposed upstream as
 >    [PR #19](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/pull/19).
@@ -9521,9 +9523,16 @@ bool UpdateTaskbarWindowRegion(HWND taskbarWindow,
     return false;
   }
   const float scale = rasterizationScale > 0.0f ? rasterizationScale : 1.0f;
-  int x1 = static_cast<int>(std::lround(visibleXDip * scale));
+  // Fork addition: the clip reaches one pixel past each edge of the island.
+  // The island's edges seldom fall on a pixel boundary: its width is drawn
+  // unrounded, and scaled when the island shrinks on overflow. The pixel an
+  // edge falls in holds the outer column of the island's border, while the
+  // edges handed in here are rounded to whole pixels, up to a pixel away. So
+  // the nearest pixel alone cut the border off the right end about half the
+  // time, at any display scale.
+  int x1 = static_cast<int>(std::lround(visibleXDip * scale)) - 1;
   int x2 = static_cast<int>(
-      std::lround((visibleXDip + visibleWidthDip) * scale));
+      std::lround((visibleXDip + visibleWidthDip) * scale)) + 1;
   if (x1 < 0) x1 = 0;
   if (x2 > wndW) x2 = wndW;
   const bool onMonitor = IsTaskbarWindowOnItsMonitorTai(taskbarWindow, wnd);
@@ -9565,9 +9574,11 @@ bool UpdateTaskbarWindowRegion(HWND taskbarWindow,
   if (TakeTaskbarRevealZoneAppliedTai(taskbarWindow)) {
     force = true;
   }
-  if (!force && hasOwnRegion && std::abs(current.left - x1) <= 1 &&
-      std::abs(current.right - x2) <= 1 &&
-      std::abs(current.bottom - wndH) <= 1) {
+  // Fork addition: compared exactly, since a tolerance let a clip a pixel
+  // short of the island stay. A rounded region's bounds are exactly the
+  // rectangle it was made from.
+  if (!force && hasOwnRegion && current.left == x1 && current.right == x2 &&
+      current.bottom == wndH) {
     return true;
   }
   int cr = static_cast<int>(std::lround(cornerRadiusDip * scale));
