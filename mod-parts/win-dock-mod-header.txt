@@ -1,7 +1,7 @@
 // ==WindhawkMod==
 // @id              taskbar-dock-like
 // @name            TAI (taskbar as island) for Windows 11 - vo fork
-// @description     Centers and floats the taskbar, moves the system tray next to the task area, and serves as an all-in-one, one-click mod to transform the taskbar into an animated dock. Fork additions: the clickable taskbar area is clipped to the visible island; the keyboard layout flyout and the tray and Start button right-click menus open at the island; the Win key opens Start on the monitor in use; an auto-hidden taskbar comes back only from the screen edge under the island; the Notification Center can be limited to the primary monitor. Fork fixes: the tray lines up with the island on 25H2, the mod loads on the September 2026 update, the Notification Center opens beside the island on the first click, and taskbars on several monitors are kept apart and survive monitors being plugged in and out.
+// @description     Centers and floats the taskbar as an animated dock. Fork changes are listed under Details.
 // @version         {version_code}
 // @author          vitaliiorlov (fork of DarkionAvey)
 // @github          https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed
