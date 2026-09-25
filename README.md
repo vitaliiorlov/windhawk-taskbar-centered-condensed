@@ -142,6 +142,20 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >     menu part-way across the wrong monitor; Search still follows the
 >     taskbar whose Search button was clicked.
 >
+> 12. **The running-app underline sits below the icon, not behind it.**
+>     Windows keeps a task button's underline a fixed distance up from the
+>     button's bottom edge and centres the icon, so a bigger icon or a shorter
+>     taskbar put the underline behind the icon's bottom edge. The icon is
+>     drawn on top, so the short grey underline of an app in the background
+>     disappeared entirely. Where they would overlap, the fork moves the
+>     underline down to just below the icon, still inside the button's
+>     highlight, and makes it thinner when the room is tight; with no room at
+>     all (an icon about as tall as the highlight) it draws the underline over
+>     the icon rather than hide it. It is measured from the button's layout,
+>     so it follows the taskbar height, icon size and button size settings at
+>     any display scale. The progress bar some apps show on their button gets
+>     the same move.
+>
 > Everything else — the island auto-scaling, the WindhawkBlur engine, the
 > Y-above-taskbar clamp and Notification-Center detection — is upstream's
 > code, used as-is. Earlier versions of this fork carried their own
