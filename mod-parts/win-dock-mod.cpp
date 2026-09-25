@@ -2303,6 +2303,14 @@ uint64_t GetChildStyleSignatureTai(
     signature = AppendChildStyleSignatureTai(signature, child.automationName);
     signature ^= child.hasValidRect ? 1ULL : 0ULL;
     signature *= kFnvPrime;
+    // Fork addition: a new taskbar height restyles the buttons from this pass,
+    // before they are laid out at that height, so restyle them once they are.
+    // See UpdateTaskButtonIndicatorsTai.
+    if (child.className == L"Taskbar.TaskListButton") {
+      signature ^= static_cast<uint64_t>(
+          std::llround(child.element.ActualHeight() * 8.0));
+      signature *= kFnvPrime;
+    }
   }
   signature ^= static_cast<uint64_t>(measurement.children.size());
   signature *= kFnvPrime;
@@ -2318,6 +2326,180 @@ bool ApplyTaskbarButtonSizing(
         layoutChanged;
   }
   return layoutChanged;
+}
+
+// Fork addition. Windows bottom-aligns a task button's running indicator in
+// the icon panel, a fixed margin up from its bottom, and centers the icon in
+// the same panel. A bigger icon or a shorter taskbar therefore brings the
+// icon's bottom edge down past the indicator's top edge, and as the icon is
+// drawn after the indicator, the indicator disappears behind it -- entirely,
+// for the short one an app in the background gets. Where they overlap, move
+// the indicator down to a small gap under the icon, keeping it inside the
+// button's highlight. If that leaves too little room, make it thinner, down to
+// a minimum. If even that does not fit (an icon about as tall as the
+// highlight), put it at the bottom of the highlight and draw it over the icon,
+// so a running app never loses its indicator. Where they do not overlap,
+// Windows' placement is kept. Everything is read from the laid-out panel, in
+// DIPs, so this follows the taskbar height, icon size and button size settings
+// at any display scale. The progress bar takes the running indicator's place
+// and gets the same move, but keeps its own height and drawing order.
+constexpr double kRunningIndicatorHeightTai = 3.5;
+constexpr double kRunningIndicatorMinHeightTai = 2.0;
+constexpr double kProgressIndicatorHeightTai = 3.8;
+constexpr double kIndicatorIconGapTai = 1.0;
+constexpr double kIndicatorHighlightInsetTai = 0.5;
+
+// The indicators' margins as the template sets them. Margin() returns that only
+// while the element has no local margin, so it is kept from before one is set.
+thread_local std::optional<Thickness> g_runningIndicatorTemplateMarginTai;
+thread_local std::optional<Thickness> g_progressIndicatorTemplateMarginTai;
+
+struct IndicatorRoomTai {
+  double panelHeight;
+  double iconBottom;
+  double highlightBottom;
+};
+
+bool HasLocalValueTai(DependencyObject const& element,
+                      DependencyProperty const& property) {
+  return element.ReadLocalValue(property) != DependencyProperty::UnsetValue();
+}
+
+Thickness GetIndicatorTemplateMarginTai(FrameworkElement const& indicator,
+                                        std::optional<Thickness>* cache) {
+  if (!HasLocalValueTai(indicator, FrameworkElement::MarginProperty())) {
+    *cache = indicator.Margin();
+  } else if (!*cache) {
+    indicator.ClearValue(FrameworkElement::MarginProperty());
+    *cache = indicator.Margin();
+  }
+  return **cache;
+}
+
+void PlaceIndicatorBelowIconTai(FrameworkElement const& indicator,
+                                bool isRunningIndicator,
+                                IndicatorRoomTai const& room) {
+  if (indicator.VerticalAlignment() != VerticalAlignment::Bottom) {
+    return;  // Moved by another mod.
+  }
+
+  const Thickness templateMargin = GetIndicatorTemplateMarginTai(
+      indicator,
+      isRunningIndicator ? &g_runningIndicatorTemplateMarginTai
+                         : &g_progressIndicatorTemplateMarginTai);
+  double height = isRunningIndicator
+                      ? kRunningIndicatorHeightTai
+                      : std::max(indicator.ActualHeight(),
+                                 kProgressIndicatorHeightTai);
+  const double templateBottom = room.panelHeight - templateMargin.Bottom;
+  const double top = room.iconBottom + kIndicatorIconGapTai;
+
+  std::optional<double> bottom;  // Unset: Windows' placement clears the icon.
+  bool drawOverIcon = false;
+  if (templateBottom - height < top) {
+    const double maxBottom = std::max(
+        room.highlightBottom - kIndicatorHighlightInsetTai, templateBottom);
+    if (top + height <= maxBottom) {
+      bottom = top + height;
+    } else {
+      bottom = maxBottom;
+      if (isRunningIndicator) {
+        height = std::max(maxBottom - top, kRunningIndicatorMinHeightTai);
+        drawOverIcon = maxBottom - height < room.iconBottom;
+      }
+    }
+  }
+
+  bool changed = false;
+  const bool hasLocalMargin =
+      HasLocalValueTai(indicator, FrameworkElement::MarginProperty());
+  if (bottom) {
+    Thickness margin = templateMargin;
+    margin.Bottom = room.panelHeight - *bottom;
+    if (!hasLocalMargin ||
+        std::abs(indicator.Margin().Bottom - margin.Bottom) > 0.01) {
+      indicator.Margin(margin);
+      changed = true;
+    }
+  } else if (hasLocalMargin) {
+    indicator.ClearValue(FrameworkElement::MarginProperty());
+    changed = true;
+  }
+  if (isRunningIndicator && !(std::abs(indicator.Height() - height) <= 0.01)) {
+    indicator.Height(height);
+    changed = true;
+  }
+  if (drawOverIcon !=
+      HasLocalValueTai(indicator, Controls::Canvas::ZIndexProperty())) {
+    if (drawOverIcon) {
+      Controls::Canvas::SetZIndex(indicator, 1);
+    } else {
+      indicator.ClearValue(Controls::Canvas::ZIndexProperty());
+    }
+    changed = true;
+  }
+
+  if (changed) {
+    Wh_Log(L"%s: panel %.2f, icon bottom %.2f, highlight bottom %.2f, "
+           L"template bottom %.2f -> bottom %.2f, height %.2f%s",
+           isRunningIndicator ? L"RunningIndicator" : L"ProgressIndicator",
+           room.panelHeight, room.iconBottom, room.highlightBottom,
+           templateBottom, bottom.value_or(templateBottom), height,
+           drawOverIcon ? L", over the icon" : L"");
+  }
+}
+
+void UpdateTaskButtonIndicatorsTai(FrameworkElement const& iconPanel) {
+  auto runningIndicator = FindChildByName(iconPanel, L"RunningIndicator");
+  auto progressIndicator = FindChildByName(iconPanel, L"ProgressIndicator");
+  if (!runningIndicator && !progressIndicator) {
+    return;
+  }
+
+  if (g_unloading) {
+    for (auto const& indicator : {runningIndicator, progressIndicator}) {
+      if (indicator) {
+        indicator.ClearValue(FrameworkElement::MarginProperty());
+        indicator.ClearValue(Controls::Canvas::ZIndexProperty());
+      }
+    }
+    if (runningIndicator) {
+      runningIndicator.ClearValue(FrameworkElement::HeightProperty());
+    }
+    return;
+  }
+
+  auto icon = FindChildByName(iconPanel, L"Icon");
+  const double panelHeight = iconPanel.ActualHeight();
+  if (!icon || !(panelHeight > 0.0)) {
+    return;
+  }
+  // The icon may have just been given a new size, which layout has not applied
+  // yet. It stays centered, so take its center from layout and its size from
+  // what was set.
+  double iconSize = icon.Height();
+  if (!(iconSize > 0.0)) {
+    iconSize = icon.ActualHeight();
+  }
+  IndicatorRoomTai room{
+      panelHeight,
+      icon.ActualOffset().y + (icon.ActualHeight() + iconSize) / 2.0,
+      panelHeight,
+  };
+  if (auto highlight = FindChildByName(iconPanel, L"BackgroundElement")) {
+    const double highlightHeight = highlight.ActualHeight();
+    if (highlightHeight > 0.0) {
+      room.highlightBottom = std::min(
+          panelHeight, highlight.ActualOffset().y + highlightHeight);
+    }
+  }
+
+  if (runningIndicator) {
+    PlaceIndicatorBelowIconTai(runningIndicator, true, room);
+  }
+  if (progressIndicator) {
+    PlaceIndicatorBelowIconTai(progressIndicator, false, room);
+  }
 }
 
 void ApplyMeasuredChildStyles(
@@ -2386,7 +2568,7 @@ void ApplyMeasuredChildStyles(
           if (auto progressBarRoot = FindChildByName(layoutRoot, L"ProgressBarRoot")) {
             if (auto border = FindChildByClassName(progressBarRoot, L"Windows.UI.Xaml.Controls.Border")) {
               if (auto grid = FindChildByClassName(border, L"Windows.UI.Xaml.Controls.Grid")) {
-                grid.Height(3.8);
+                grid.Height(kProgressIndicatorHeightTai);
                 if (auto progressBarTrack = FindChildByName(grid, L"ProgressBarTrack")) {
                   progressBarTrack.Opacity(0.5);
                 }
@@ -2395,9 +2577,10 @@ void ApplyMeasuredChildStyles(
           }
         }
       } else if (auto runningIndicator = FindChildByName(iconPanelElement, L"RunningIndicator")) {
-        runningIndicator.Height(3.5);
         runningIndicator.Opacity(1);
       }
+      // Fork addition: this also sets the running indicator's height.
+      UpdateTaskButtonIndicatorsTai(iconPanelElement);
     }
   }
 }
