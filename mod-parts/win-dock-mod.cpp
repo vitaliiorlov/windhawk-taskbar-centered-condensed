@@ -5968,8 +5968,41 @@ int WINAPI SetWindowRgn_Hook(HWND hWnd, HRGN hRgn, BOOL bRedraw) {
   }
   return SetWindowRgn_Original(hWnd, hRgn, bRedraw);
 }
+// Fork addition. Since 1.5.271 this fork has its own mod ID,
+// taskbar-dock-like-vo; it used to share taskbar-dock-like with the original
+// TAI. Pasting the new code over an installed copy in Windhawk's editor moves
+// that copy to the new ID, but a copy made with "Create a new mod" runs beside
+// the old one, and the two would fight over every hook and taskbar property.
+// So stay unloaded while a copy under the old ID is installed and enabled.
+// Only a regular Windhawk install keeps its mods in the registry; a portable
+// one is not checked.
+bool IsOldTaiModEnabledTai() {
+  if (wcscmp(WH_MOD_ID, L"local@taskbar-dock-like") == 0) {
+    return false;
+  }
+  HKEY key;
+  if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                    L"SOFTWARE\\Windhawk\\Engine\\Mods\\local@taskbar-dock-like",
+                    0, KEY_QUERY_VALUE | KEY_WOW64_64KEY,
+                    &key) != ERROR_SUCCESS) {
+    return false;
+  }
+  DWORD disabled = 0;
+  DWORD size = sizeof(disabled);
+  const LSTATUS status =
+      RegQueryValueExW(key, L"Disabled", nullptr, nullptr,
+                       reinterpret_cast<LPBYTE>(&disabled), &size);
+  RegCloseKey(key);
+  return status != ERROR_SUCCESS || disabled == 0;
+}
 BOOL Wh_ModInit() {
   Wh_Log(L"======================================================");
+  if (IsOldTaiModEnabledTai()) {
+    Wh_Log(L"Not loading: TAI under its old mod ID (taskbar-dock-like) is "
+           L"installed and enabled. Remove or disable it in Windhawk, then "
+           L"turn this mod off and on.");
+    return FALSE;
+  }
   HMODULE moduleUser32 = GetModuleHandleW(L"user32.dll");
   if (moduleUser32) {
     auto pSetWindowPos = (SetWindowPos_t)GetProcAddress(moduleUser32, "SetWindowPos");

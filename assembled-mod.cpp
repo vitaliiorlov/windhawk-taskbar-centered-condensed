@@ -1,8 +1,8 @@
 // ==WindhawkMod==
-// @id              taskbar-dock-like
+// @id              taskbar-dock-like-vo
 // @name            TAI (taskbar as island) for Windows 11 - vo fork
 // @description     Centers and floats the taskbar as an animated dock. Fork changes are listed under Details.
-// @version         1.5.270-vo
+// @version         1.5.272-vo
 // @author          vitaliiorlov (fork of DarkionAvey)
 // @github          https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed
 // @include         explorer.exe
@@ -18,7 +18,7 @@
 // https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed
 // ==WindhawkModReadme==
 /*
-![Screenshot](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed/raw/main/screenshot.png)
+![Screenshot](https://raw.githubusercontent.com/vitaliiorlov/windhawk-taskbar-centered-condensed/main/screenshot.png)
 # TAI (Taskbar as (an) island) for Windows 11
 TAI lets you transform your Windows 11 taskbar into a smooth floating dock without losing any of the original taskbar functionality!
 # Bug reports
@@ -31,6 +31,17 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 > Upstream: [DarkionAvey/windhawk-taskbar-centered-condensed](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed).
 > This fork ([vitaliiorlov/windhawk-taskbar-centered-condensed](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed))
 > tracks upstream closely; everything it adds or fixes on top is listed below.
+>
+> ### ⚠️ Own mod ID since 1.5.271
+>
+> This fork used to share the mod ID `taskbar-dock-like` with the original
+> TAI. It now has its own, `taskbar-dock-like-vo`, so Windhawk keeps the two
+> apart. **If TAI is already installed** (the original or an earlier build of
+> this fork), update it the usual way: open it in Windhawk, click **Edit**,
+> paste the new code over it and compile. Windhawk moves it to the new ID and
+> keeps your settings. Don't install it with **Create a new mod** while the
+> old one is there: you would get two copies, and this one stays off until
+> the old one is removed or disabled. See *How to Install* below.
 >
 > ### What's different from upstream
 >
@@ -196,9 +207,16 @@ features.
    `assembled-mod.cpp`](https://raw.githubusercontent.com/vitaliiorlov/windhawk-taskbar-centered-condensed/main/assembled-mod.cpp)
    to your clipboard.
 3. Open **WindHawk** and navigate to: `Explore` → `Create a new mod`.
+   **Already have TAI** (the original or an earlier build of this fork)? Open
+   it in Windhawk and click **Edit** instead: pasting over it moves it to this
+   fork's mod ID and keeps your settings.
 4. Press `Ctrl+A` to select all, then `Ctrl+V` to paste.
 5. Click **Compile Mod** button on the top left corner.
 6. Change the mod's settings to fit your preference.
+If the mod doesn't start after an update (for example, when a Windows update
+broke the previous version), turn it off and on again in Windhawk; if that
+doesn't help at once, wait a minute and repeat. Restarting Explorer won't
+help: Windhawk doesn't retry a mod that failed to load there for up to 4 hours.
 ---
 ## 🛠 Source Code
 The actual mod code is split into files under [
@@ -207,16 +225,15 @@ The actual mod code is split into files under [
 modify the source files in the `mod-parts` directory.
 ---
 ## 🙌 Credits
-Huge thanks to these awesome developers who made this mod possible -- your contributions to modding Windows are truly appreciated!:
-- [`Michael Maltsev (m417z)`](https://github.com/m417z)
-- [`Valentin Radu (valinet)`](https://github.com/valinet)
-- [`TranslucentTB team`](https://github.com/translucenttb/translucenttb)
----
-## 🔥 Recommended Mods
-- [Taskbar Fluent Media Player](https://windhawk.net/mods/taskbar-fluent-media-player) \[Set player position to Tray\]
-- [Smart Auto Hide for Taskbar](https://windhawk.net/mods/taskbar-auto-hide-when-maximized)
-- [Taskbar Auto-Hide Speed/Frame Rate](https://windhawk.net/mods/taskbar-auto-hide-speed)
-- [Show All Tray Icons](https://windhawk.net/mods/taskbar-notification-icons-show-all)
+- [DarkionAvey](https://github.com/DarkionAvey): the original
+  [TAI](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed),
+  which this fork builds on.
+- [Michael Maltsev (m417z)](https://github.com/m417z): every build bundles his
+  mods [Taskbar height and icon size](https://windhawk.net/mods/taskbar-icon-size)
+  and [Start button always on the left](https://windhawk.net/mods/taskbar-start-button-position).
+- [Valentin Radu (valinet)](https://github.com/valinet) and the
+  [TranslucentTB team](https://github.com/translucenttb/translucenttb), whom
+  the original TAI credits.
 ---
 # Options
 | Property | Name | Description | Accepted values |
@@ -11960,8 +11977,41 @@ int WINAPI SetWindowRgn_Hook(HWND hWnd, HRGN hRgn, BOOL bRedraw) {
   }
   return SetWindowRgn_Original(hWnd, hRgn, bRedraw);
 }
+// Fork addition. Since 1.5.271 this fork has its own mod ID,
+// taskbar-dock-like-vo; it used to share taskbar-dock-like with the original
+// TAI. Pasting the new code over an installed copy in Windhawk's editor moves
+// that copy to the new ID, but a copy made with "Create a new mod" runs beside
+// the old one, and the two would fight over every hook and taskbar property.
+// So stay unloaded while a copy under the old ID is installed and enabled.
+// Only a regular Windhawk install keeps its mods in the registry; a portable
+// one is not checked.
+bool IsOldTaiModEnabledTai() {
+  if (wcscmp(WH_MOD_ID, L"local@taskbar-dock-like") == 0) {
+    return false;
+  }
+  HKEY key;
+  if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                    L"SOFTWARE\\Windhawk\\Engine\\Mods\\local@taskbar-dock-like",
+                    0, KEY_QUERY_VALUE | KEY_WOW64_64KEY,
+                    &key) != ERROR_SUCCESS) {
+    return false;
+  }
+  DWORD disabled = 0;
+  DWORD size = sizeof(disabled);
+  const LSTATUS status =
+      RegQueryValueExW(key, L"Disabled", nullptr, nullptr,
+                       reinterpret_cast<LPBYTE>(&disabled), &size);
+  RegCloseKey(key);
+  return status != ERROR_SUCCESS || disabled == 0;
+}
 BOOL Wh_ModInit() {
   Wh_Log(L"======================================================");
+  if (IsOldTaiModEnabledTai()) {
+    Wh_Log(L"Not loading: TAI under its old mod ID (taskbar-dock-like) is "
+           L"installed and enabled. Remove or disable it in Windhawk, then "
+           L"turn this mod off and on.");
+    return FALSE;
+  }
   HMODULE moduleUser32 = GetModuleHandleW(L"user32.dll");
   if (moduleUser32) {
     auto pSetWindowPos = (SetWindowPos_t)GetProcAddress(moduleUser32, "SetWindowPos");
