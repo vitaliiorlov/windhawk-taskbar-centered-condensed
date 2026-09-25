@@ -198,3 +198,8 @@
   $name: Open Start on the monitor in use
   $description: When enabled, the Start menu opened with the Win key (or Ctrl+Esc) opens on the monitor of the window you are working in, or the one under the mouse when the desktop or a taskbar has focus, instead of always on the main display. A taskbar's Start button already opens it on that taskbar's monitor. Only monitors with a taskbar are used. Default is on.
   $type: bool
+
+- AutoHideShowUnderTaskbarOnly: true
+  $name: Show an auto-hidden taskbar only from under it
+  $description: When the taskbar hides automatically, it comes back only when the mouse reaches the screen edge under the taskbar, instead of anywhere along that edge. The rest of the edge is left to the windows behind it. Default is on.
+  $type: bool

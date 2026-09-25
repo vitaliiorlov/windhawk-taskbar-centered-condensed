@@ -3006,6 +3006,7 @@ void UpdateGlobalSettings() {
   g_settings.userDefinedStyleTrayArea = (getInt(L"StyleTrayArea") != 0);
   g_settings.userDefinedAlignFlyoutInner = (getInt(L"AlignFlyoutInner") != 0);
   g_settings.userDefinedNotificationCenterPrimaryOnly = (getInt(L"NotificationCenterPrimaryOnly") != 0);
+  g_settings.userDefinedAutoHideShowUnderTaskbarOnly = (getInt(L"AutoHideShowUnderTaskbarOnly") != 0) && !g_unloading;
   g_settings.userDefinedCustomizeTaskbarBackground = (getInt(L"CustomizeTaskbarBackground") != 0);
   g_settings.userDefinedDisableCustomBlurBackground = (getInt(L"DisableCustomBlurBackground") != 0);
   PCWSTR appsDividerAlignment = Wh_GetStringSetting(L"AppsDividerAlignment");
@@ -3165,13 +3166,14 @@ void LogAllSettings() {
 // island is shrunk with a composition Visual.Scale when it would overflow, so
 // feeding pre-scale geometry here would clip a region wider than what is
 // actually drawn. Only the X axis is clipped -- the full window height stays
-// clickable so the auto-hide reveal zone is unaffected.
+// clickable.
 //
 // Windows sets and clears this region too. It clips an auto-hidden taskbar to
 // the sliver still on its monitor, so the rest cannot show on a neighbouring
-// monitor, and clears the region again when the taskbar comes back. So the
-// region is left to Windows while the taskbar is not entirely on its monitor,
-// and otherwise checked against the window on every pass rather than set only
+// monitor, and clears the region again when the taskbar comes back. So while
+// the taskbar is not entirely on its monitor the region is left to Windows, or
+// to the reveal zone (see TaskbarRevealZoneTai), and otherwise it is checked
+// against the window on every pass rather than set only
 // when the island moves: that missed Windows clearing it, and never undid a
 // region written to the wrong taskbar, which clipped the island mid-way on a
 // laptop below an external monitor (upstream issue #32).
@@ -3213,6 +3215,245 @@ static HWND FindTaskbarWindowForMonitorTai(std::wstring const& monitorName) {
   return context.window;
 }
 
+// Fork addition: an auto-hidden taskbar comes back only when the mouse reaches
+// the screen edge under the island, not anywhere along that edge
+// (AutoHideShowUnderTaskbarOnly).
+//
+// Windows leaves a 2px sliver of an auto-hidden taskbar on its monitor, and the
+// mouse hitting it brings the taskbar back: the taskbar's WM_NCHITTEST handler
+// (TrayUI::WndProc, CSecondaryTray::_OnNCHitTest) starts the unhide timer. The
+// window is as wide as the monitor, so that is the whole edge. Hit testing
+// honours the window region, so while the taskbar is off its monitor the region
+// is cut to the island, and the rest of the edge goes to the windows behind it.
+//
+// Windows sets a region on a hidden taskbar itself when the part parked off its
+// monitor would land on another monitor (TrayUI::_ClipInternal): with a laptop
+// below an external screen, the external's taskbar would otherwise lie across
+// the top of the laptop's. It sets that as the taskbar slides out, and clears
+// it as the taskbar comes back. So Windows' region is only ever narrowed,
+// keeping its height, and a region the mod sets itself always has the window's
+// full height. Windows never clears a region it did not set, and a full-height
+// region is still right once the taskbar is back, even when another mod
+// ("Taskbar Auto-Hide Instant Show") slides it in from the hidden position
+// after Windows has cleared its own.
+//
+// SetWindowRgn_Hook narrows Windows' region as it is set, SetWindowPos_Hook
+// cuts the region when the taskbar moves off its monitor, and each pass does
+// the same from UpdateTaskbarWindowRegion, which also records the island.
+// Once the taskbar is back on its monitor, UpdateTaskbarWindowRegion clips it
+// as usual.
+struct TaskbarRevealZoneTai {
+  // The island, in window pixels. Empty while the setting is off.
+  int islandLeft = 0;
+  int islandRight = 0;
+  // The region Windows last set on the window, put back when the setting is
+  // turned off or the mod unloads. Windows' region is always a rectangle.
+  bool hasWindowsRegion = false;
+  RECT windowsRegion{};
+  // The window's region is the reveal zone's.
+  bool applied = false;
+};
+static std::mutex g_taskbarRevealZonesMutexTai;
+static std::unordered_map<HWND, TaskbarRevealZoneTai> g_taskbarRevealZonesTai;
+
+// A SetWindowRgn call of the mod's, which SetWindowRgn_Hook lets through. It is
+// matched on its arguments, so a region Windows sets from inside the call (the
+// taskbar handles the WM_WINDOWPOSCHANGED it sends) is still seen as Windows'.
+struct OwnTaskbarRegionCallTai {
+  HWND window;
+  HRGN region;
+  bool pending;
+};
+thread_local OwnTaskbarRegionCallTai g_ownTaskbarRegionCallTai{};
+
+static void SetOwnTaskbarWindowRegionTai(HWND taskbarWindow, HRGN region) {
+  g_ownTaskbarRegionCallTai = {taskbarWindow, region, true};
+  // SetWindowRgn takes ownership of region; do not DeleteObject after.
+  SetWindowRgn(taskbarWindow, region, TRUE);
+  g_ownTaskbarRegionCallTai.pending = false;
+}
+
+static bool IsOwnTaskbarRegionCallTai(HWND window, HRGN region) {
+  auto& call = g_ownTaskbarRegionCallTai;
+  if (!call.pending || call.window != window || call.region != region) {
+    return false;
+  }
+  call.pending = false;
+  return true;
+}
+
+// The region of a taskbar that is off its monitor: Windows' region, or else the
+// whole window, cut to the island.
+static bool GetTaskbarRevealRegionTai(TaskbarRevealZoneTai const& zone,
+                                      RECT const& windowRect,
+                                      RECT* region) {
+  if (zone.islandRight <= zone.islandLeft) {
+    return false;
+  }
+  const RECT base = zone.hasWindowsRegion
+                        ? zone.windowsRegion
+                        : RECT{0, 0, windowRect.right - windowRect.left,
+                               windowRect.bottom - windowRect.top};
+  const RECT island{zone.islandLeft, base.top, zone.islandRight, base.bottom};
+  return IntersectRect(region, &base, &island) != FALSE;
+}
+
+// Records the island, from UpdateTaskbarWindowRegion. islandRegionBox is the
+// bounds of the region it set, which is not Windows'.
+static void SetTaskbarIslandSpanTai(HWND taskbarWindow,
+                                    int left,
+                                    int right,
+                                    bool onMonitor,
+                                    RECT const& islandRegionBox) {
+  std::lock_guard<std::mutex> lock(g_taskbarRevealZonesMutexTai);
+  auto it = g_taskbarRevealZonesTai.find(taskbarWindow);
+  if (it == g_taskbarRevealZonesTai.end()) {
+    std::erase_if(g_taskbarRevealZonesTai,
+                  [](auto const& entry) { return !IsWindow(entry.first); });
+    // A region Windows set before the mod loaded, or before the setting was
+    // turned on. Windows' region is gone once the taskbar is back on its
+    // monitor, so it is whatever region a taskbar off its monitor has, other
+    // than the island's.
+    TaskbarRevealZoneTai zone;
+    zone.hasWindowsRegion =
+        !onMonitor &&
+        GetWindowRgnBox(taskbarWindow, &zone.windowsRegion) != ERROR &&
+        !EqualRect(&zone.windowsRegion, &islandRegionBox);
+    it = g_taskbarRevealZonesTai.emplace(taskbarWindow, zone).first;
+  }
+  it->second.islandLeft = left;
+  it->second.islandRight = right;
+}
+
+// Stops cutting the taskbar's region to the island, and puts back Windows'
+// region where it had been cut. Returns true when the window is left with a
+// region of Windows', which must stay.
+static bool RestoreTaskbarRevealZoneTai(HWND taskbarWindow) {
+  bool restore = false;
+  TaskbarRevealZoneTai zone;
+  {
+    std::lock_guard<std::mutex> lock(g_taskbarRevealZonesMutexTai);
+    auto it = g_taskbarRevealZonesTai.find(taskbarWindow);
+    if (it == g_taskbarRevealZonesTai.end()) {
+      return false;
+    }
+    restore = it->second.applied;
+    it->second.islandLeft = 0;
+    it->second.islandRight = 0;
+    it->second.applied = false;
+    zone = it->second;
+  }
+  if (restore) {
+    Wh_Log(L"[RevealZone] %p restored", taskbarWindow);
+    SetOwnTaskbarWindowRegionTai(
+        taskbarWindow, zone.hasWindowsRegion
+                           ? CreateRectRgnIndirect(&zone.windowsRegion)
+                           : nullptr);
+    return zone.hasWindowsRegion;
+  }
+  RECT current{};
+  return zone.hasWindowsRegion &&
+         GetWindowRgnBox(taskbarWindow, &current) != ERROR &&
+         EqualRect(&current, &zone.windowsRegion);
+}
+
+static void ClearTaskbarRevealZonesTai() {
+  std::lock_guard<std::mutex> lock(g_taskbarRevealZonesMutexTai);
+  g_taskbarRevealZonesTai.clear();
+}
+
+// Cuts the region of a taskbar that is off its monitor to the island.
+static void ApplyTaskbarRevealZoneTai(HWND taskbarWindow,
+                                      RECT const& windowRect) {
+  RECT region{};
+  {
+    std::lock_guard<std::mutex> lock(g_taskbarRevealZonesMutexTai);
+    auto it = g_taskbarRevealZonesTai.find(taskbarWindow);
+    if (it == g_taskbarRevealZonesTai.end() ||
+        !GetTaskbarRevealRegionTai(it->second, windowRect, &region)) {
+      return;
+    }
+    RECT current{};
+    if (it->second.applied &&
+        GetWindowRgnBox(taskbarWindow, &current) == SIMPLEREGION &&
+        EqualRect(&current, &region)) {
+      return;
+    }
+    it->second.applied = true;
+  }
+  Wh_Log(L"[RevealZone] %p cut to (%ld,%ld)-(%ld,%ld)", taskbarWindow,
+         region.left, region.top, region.right, region.bottom);
+  SetOwnTaskbarWindowRegionTai(taskbarWindow, CreateRectRgnIndirect(&region));
+}
+
+// From SetWindowPos_Hook, once a taskbar window has moved.
+static void ApplyTaskbarRevealZoneAfterMoveTai(HWND taskbarWindow) {
+  RECT windowRect{};
+  if (GetWindowRect(taskbarWindow, &windowRect) &&
+      !IsTaskbarWindowOnItsMonitorTai(taskbarWindow, windowRect)) {
+    ApplyTaskbarRevealZoneTai(taskbarWindow, windowRect);
+  }
+}
+
+// From SetWindowRgn_Hook, for a region set in Explorer other than by the mod.
+// Records Windows' region on a taskbar, and returns the region to set in its
+// place.
+static HRGN FitWindowsTaskbarRegionTai(HWND window, HRGN region) {
+  DWORD processId = 0;
+  RECT windowRect{};
+  if (!window || !GetWindowThreadProcessId(window, &processId) ||
+      processId != GetCurrentProcessId() ||
+      !IsTaskbarWindowClassTai(window) ||
+      !GetWindowRect(window, &windowRect)) {
+    return region;
+  }
+  RECT fitted{};
+  {
+    std::lock_guard<std::mutex> lock(g_taskbarRevealZonesMutexTai);
+    auto it = g_taskbarRevealZonesTai.find(window);
+    if (it == g_taskbarRevealZonesTai.end()) {
+      return region;
+    }
+    auto& zone = it->second;
+    zone.hasWindowsRegion =
+        region && GetRgnBox(region, &zone.windowsRegion) != ERROR;
+    zone.applied = false;
+    // Windows clearing its region as the taskbar comes back on its monitor:
+    // from here the region is UpdateTaskbarWindowRegion's.
+    if (!region && IsTaskbarWindowOnItsMonitorTai(window, windowRect)) {
+      return region;
+    }
+    if (!GetTaskbarRevealRegionTai(zone, windowRect, &fitted)) {
+      return region;
+    }
+    zone.applied = true;
+  }
+  HRGN fittedRegion = CreateRectRgnIndirect(&fitted);
+  if (!fittedRegion) {
+    return region;
+  }
+  Wh_Log(L"[RevealZone] %p Windows' region cut to (%ld,%ld)-(%ld,%ld)",
+         window, fitted.left, fitted.top, fitted.right, fitted.bottom);
+  if (region) {
+    // SetWindowRgn would have taken ownership of it.
+    DeleteObject(region);
+  }
+  return fittedRegion;
+}
+
+// From UpdateTaskbarWindowRegion, about to clip a taskbar that is on its
+// monitor. True when the region is still the reveal zone's, which has the
+// island's bounds but square corners.
+static bool TakeTaskbarRevealZoneAppliedTai(HWND taskbarWindow) {
+  std::lock_guard<std::mutex> lock(g_taskbarRevealZonesMutexTai);
+  auto it = g_taskbarRevealZonesTai.find(taskbarWindow);
+  if (it == g_taskbarRevealZonesTai.end() || !it->second.applied) {
+    return false;
+  }
+  it->second.applied = false;
+  return true;
+}
+
 // regionBox holds the bounds of the region this function last set, which is
 // how a region of Windows' is told apart from the mod's. force re-applies a
 // region the window already has the bounds of, for when only its corner
@@ -3228,19 +3469,6 @@ bool UpdateTaskbarWindowRegion(HWND taskbarWindow,
   if (!taskbarWindow || !GetWindowRect(taskbarWindow, &wnd)) {
     return false;
   }
-  RECT current{};
-  const int currentType = GetWindowRgnBox(taskbarWindow, &current);
-  const bool hasRegion =
-      currentType == SIMPLEREGION || currentType == COMPLEXREGION;
-  const bool hasOwnRegion = hasRegion && EqualRect(&current, regionBox);
-  if (!IsTaskbarWindowOnItsMonitorTai(taskbarWindow, wnd)) {
-    // Auto-hidden, or sliding in or out. The clip goes, so that anywhere
-    // along the screen edge brings the taskbar back, as without the mod.
-    if (hasOwnRegion) {
-      SetWindowRgn(taskbarWindow, nullptr, TRUE);
-    }
-    return false;
-  }
   const int wndW = wnd.right - wnd.left;
   const int wndH = wnd.bottom - wnd.top;
   if (wndW <= 0 || wndH <= 0) {
@@ -3252,13 +3480,44 @@ bool UpdateTaskbarWindowRegion(HWND taskbarWindow,
       std::lround((visibleXDip + visibleWidthDip) * scale));
   if (x1 < 0) x1 = 0;
   if (x2 > wndW) x2 = wndW;
+  const bool onMonitor = IsTaskbarWindowOnItsMonitorTai(taskbarWindow, wnd);
+  // Fork addition: see TaskbarRevealZoneTai. Too small an island is not used,
+  // as for the clip below.
+  const bool revealZone =
+      GetUserDefinedAutoHideShowUnderTaskbarOnly() && x2 - x1 >= 10;
+  if (revealZone) {
+    SetTaskbarIslandSpanTai(taskbarWindow, x1, x2, onMonitor, *regionBox);
+  } else {
+    RestoreTaskbarRevealZoneTai(taskbarWindow);
+  }
+  RECT current{};
+  const int currentType = GetWindowRgnBox(taskbarWindow, &current);
+  const bool hasRegion =
+      currentType == SIMPLEREGION || currentType == COMPLEXREGION;
+  const bool hasOwnRegion = hasRegion && EqualRect(&current, regionBox);
+  if (!onMonitor) {
+    // Auto-hidden, or sliding in or out. The region is cut to the island, or
+    // else the clip goes, so that anywhere along the screen edge brings the
+    // taskbar back, as without the mod.
+    if (revealZone) {
+      ApplyTaskbarRevealZoneTai(taskbarWindow, wnd);
+    } else if (hasOwnRegion) {
+      SetOwnTaskbarWindowRegionTai(taskbarWindow, nullptr);
+    }
+    return false;
+  }
   if (x2 - x1 < 10) {
     // Too small to be useful; fall back to the full window rather than
     // risk making the taskbar unclickable.
     if (hasRegion) {
-      SetWindowRgn(taskbarWindow, nullptr, TRUE);
+      SetOwnTaskbarWindowRegionTai(taskbarWindow, nullptr);
     }
     return true;
+  }
+  // Fork addition: back from auto-hide with the reveal zone's region, which
+  // has the island's bounds but square corners.
+  if (TakeTaskbarRevealZoneAppliedTai(taskbarWindow)) {
+    force = true;
   }
   if (!force && hasOwnRegion && std::abs(current.left - x1) <= 1 &&
       std::abs(current.right - x2) <= 1 &&
@@ -3272,8 +3531,7 @@ bool UpdateTaskbarWindowRegion(HWND taskbarWindow,
   HRGN hRgn = (cr > 0) ? CreateRoundRectRgn(x1, 0, x2 + 1, wndH + 1,
                                             cr * 2, cr * 2)
                        : CreateRectRgn(x1, 0, x2, wndH);
-  // SetWindowRgn takes ownership of hRgn; do not DeleteObject after.
-  SetWindowRgn(taskbarWindow, hRgn, TRUE);
+  SetOwnTaskbarWindowRegionTai(taskbarWindow, hRgn);
   if (GetWindowRgnBox(taskbarWindow, regionBox) == ERROR) {
     SetRectEmpty(regionBox);
   }
@@ -3346,12 +3604,15 @@ void ClearAllTaskbarWindowRegionsTai() {
             pid != GetCurrentProcessId()) {
           return TRUE;
         }
-        if (IsTaskbarWindowClassTai(hWnd)) {
-          SetWindowRgn(hWnd, nullptr, TRUE);
+        // Fork addition: see TaskbarRevealZoneTai. A region of Windows' stays.
+        if (IsTaskbarWindowClassTai(hWnd) &&
+            !RestoreTaskbarRevealZoneTai(hWnd)) {
+          SetOwnTaskbarWindowRegionTai(hWnd, nullptr);
         }
         return TRUE;
       },
       0);
+  ClearTaskbarRevealZonesTai();
 }
 
 // Fork addition: open the keyboard layout flyout -- the input switcher, shown
@@ -4805,11 +5066,13 @@ bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorNam
     const bool clearRegion =
         g_unloading || g_settings.userDefinedFullWidthTaskbarBackground;
     if (clearRegion) {
+      // Fork addition: see TaskbarRevealZoneTai.
+      RestoreTaskbarRevealZoneTai(taskbarWindow);
       RECT current{};
       if (taskbarWindow &&
           GetWindowRgnBox(taskbarWindow, &current) >= SIMPLEREGION &&
           EqualRect(&current, &state.lastRegionBox)) {
-        SetWindowRgn(taskbarWindow, nullptr, TRUE);
+        SetOwnTaskbarWindowRegionTai(taskbarWindow, nullptr);
       }
       SetRectEmpty(&state.lastRegionBox);
     } else {
@@ -5491,7 +5754,27 @@ BOOL WINAPI SetWindowPos_Hook(HWND hWnd, HWND hWndInsertAfter, int X, int Y, int
       Wh_Log(L"[SetWindowPos] No reference state for monitor %s", monitorName.c_str());
     }
   }
+  // Fork addition: see TaskbarRevealZoneTai.
+  if (!g_unloading && !(uFlags & SWP_NOMOVE) &&
+      processId == GetCurrentProcessId() &&
+      (_wcsicmp(windowClassName.c_str(), L"Shell_TrayWnd") == 0 ||
+       _wcsicmp(windowClassName.c_str(), L"Shell_SecondaryTrayWnd") == 0)) {
+    const BOOL result = callOriginal();
+    if (result) {
+      ApplyTaskbarRevealZoneAfterMoveTai(hWnd);
+    }
+    return result;
+  }
   return callOriginal();
+}
+// Fork addition: see TaskbarRevealZoneTai.
+using SetWindowRgn_t = decltype(&SetWindowRgn);
+SetWindowRgn_t SetWindowRgn_Original = nullptr;
+int WINAPI SetWindowRgn_Hook(HWND hWnd, HRGN hRgn, BOOL bRedraw) {
+  if (!IsOwnTaskbarRegionCallTai(hWnd, hRgn) && !g_unloading) {
+    hRgn = FitWindowsTaskbarRegionTai(hWnd, hRgn);
+  }
+  return SetWindowRgn_Original(hWnd, hRgn, bRedraw);
 }
 BOOL Wh_ModInit() {
   Wh_Log(L"======================================================");
@@ -5523,6 +5806,16 @@ BOOL Wh_ModInit() {
   }
   g_unloading = false;
   g_worker_threads_stopping = false;
+  // Fork addition: see TaskbarRevealZoneTai.
+  if (moduleUser32) {
+    auto pSetWindowRgn =
+        (SetWindowRgn_t)GetProcAddress(moduleUser32, "SetWindowRgn");
+    if (!pSetWindowRgn ||
+        !WindhawkUtils::SetFunctionHook(pSetWindowRgn, SetWindowRgn_Hook,
+                                        &SetWindowRgn_Original)) {
+      Wh_Log(L"Failed to hook SetWindowRgn");
+    }
+  }
   InitMinimizeAnimationCorrectionTai();
   ArmInitialExplorerStyleApplyDelay();
   if (!Wh_ModInitTBIconSize()) {

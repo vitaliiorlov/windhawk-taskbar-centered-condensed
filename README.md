@@ -31,9 +31,8 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    `SetWindowRgn` so the OS only routes mouse input to pixels inside the
 >    island. The clip is driven by the post-scale island bounds, so it tracks
 >    the island when upstream shrinks it on overflow. While an auto-hidden
->    taskbar is off screen the clip is lifted, so anywhere along the screen
->    edge brings it back, and it is put back when the taskbar is. Also
->    proposed upstream as
+>    taskbar is off screen the clip keeps to the island's width, so only the
+>    edge under the island brings it back (see 7). Also proposed upstream as
 >    [PR #19](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/pull/19).
 >
 > 2. **`NotificationCenterPrimaryOnly` setting.**
@@ -47,7 +46,7 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    `%TEMP%`, so multi-monitor and mixed-DPI placement can be diagnosed
 >    without attaching DebugView. The Start menu, Search and Notification
 >    Center lines show where Windows put the window and where it was moved;
->    repairs to a taskbar (see 10) are logged there too.
+>    repairs to a taskbar (see 11) are logged there too.
 >
 > 4. **The keyboard layout flyout opens above the language indicator.**
 >    Clicking the language indicator (or pressing Win+Space) opens a flyout
@@ -79,9 +78,22 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    `twinui.pcshell.dll`), so it is laid out there properly. Controlled by
 >    the `StartMenuOnActiveMonitor` setting (on by default).
 >
+> 7. **An auto-hidden taskbar comes back only from under the island.**
+>    Windows keeps a 2px sliver of an auto-hidden taskbar on the screen and
+>    brings the taskbar back when the mouse touches it. The taskbar window is
+>    as wide as the monitor, so with the island in the middle, reaching the
+>    bottom edge anywhere, even in a far corner, brought it up. This fork
+>    cuts the hidden taskbar's window region to the island, so only the edge
+>    under the island brings it back and the rest of the edge is left to the
+>    windows behind it. Windows' own clip, which keeps a hidden taskbar off a
+>    neighbouring monitor, is kept. The *Edge detection* option of "Taskbar
+>    Auto-Hide Instant Show" brings the taskbar up from anywhere on the edge
+>    by itself, so leave it off to use this. Controlled by the
+>    `AutoHideShowUnderTaskbarOnly` setting (on by default).
+>
 > #### Fixed
 >
-> 7. **The system tray lines up with the island on Windows 11 25H2.**
+> 8. **The system tray lines up with the island on Windows 11 25H2.**
 >    On 25H2 the clock, battery, volume and language indicator sat above or
 >    below the app icons by exactly `TaskbarOffsetY`, and came back that way
 >    after every Explorer restart
@@ -91,7 +103,7 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    XAML centring it implicitly, which 25H2 stopped doing; the fork pins its
 >    vertical alignment to centre on every pass.
 >
-> 8. **The mod loads on the September 2026 Windows update.**
+> 9. **The mod loads on the September 2026 Windows update.**
 >    Build 26100.9549 / 26200.9550 added a parameter to
 >    `CTaskBand::_UpdateItemIcon` in `taskbar.dll`, and the mod, whose hook
 >    only knew the old signature, stopped loading
@@ -99,18 +111,18 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    The hook accepts both signatures and is optional, so a future change
 >    costs one layout trigger rather than the whole mod.
 >
-> 9. **The Notification Center opens beside the island from the first click.**
->    Upstream moves the clock and calendar flyout as Explorer reveals it, and
->    recognises it by its window title. On the first open after Explorer
->    starts, the window is revealed before it has a size or that title, so it
->    opened at the right edge of the screen. This fork also shifts the
->    position Explorer computes for the flyout
->    (`CActionCenterExperienceManager::GetViewPosition` in `twinui.pcshell.dll`),
->    so every open lands where upstream's code puts the later ones. Follows
->    the `MoveFlyoutNotificationCenter` and `NotificationCenterPrimaryOnly`
->    settings.
+> 10. **The Notification Center opens beside the island from the first click.**
+>     Upstream moves the clock and calendar flyout as Explorer reveals it, and
+>     recognises it by its window title. On the first open after Explorer
+>     starts, the window is revealed before it has a size or that title, so it
+>     opened at the right edge of the screen. This fork also shifts the
+>     position Explorer computes for the flyout
+>     (`CActionCenterExperienceManager::GetViewPosition` in `twinui.pcshell.dll`),
+>     so every open lands where upstream's code puts the later ones. Follows
+>     the `MoveFlyoutNotificationCenter` and `NotificationCenterPrimaryOnly`
+>     settings.
 >
-> 10. **Taskbars on several monitors are kept apart, and survive display changes.**
+> 11. **Taskbars on several monitors are kept apart, and survive display changes.**
 >     Each taskbar is matched to its monitor by the `TaskbarMonitor` property
 >     Explorer sets on it, not by where its window happens to be: an
 >     auto-hidden taskbar parked over the monitor below it was styled and
@@ -237,3 +249,4 @@ Huge thanks to these awesome developers who made this mod possible -- your contr
 | `MoveFlyoutKeyboardLayout` | Move keyboard layout flyout with Taskbar | When enabled, the keyboard layout flyout (opened by clicking the language indicator or pressing Win+Space) is centered above the language indicator on the taskbar instead of at the right edge of the screen. On a monitor whose taskbar has no language indicator it is centered above the tray instead. Default is on. | Boolean (true/false) |
 | `MoveTrayContextMenus` | Move tray icon menus with Taskbar | When enabled, the right-click menus of the clock and the system tray icons (network, volume, battery, language) open at the right end of the taskbar, lined up with the Notification Center, instead of at the right edge of the screen. Default is on. | Boolean (true/false) |
 | `StartMenuOnActiveMonitor` | Open Start on the monitor in use | When enabled, the Start menu opened with the Win key (or Ctrl+Esc) opens on the monitor of the window you are working in, or the one under the mouse when the desktop or a taskbar has focus, instead of always on the main display. A taskbar's Start button already opens it on that taskbar's monitor. Only monitors with a taskbar are used. Default is on. | Boolean (true/false) |
+| `AutoHideShowUnderTaskbarOnly` | Show an auto-hidden taskbar only from under it | When the taskbar hides automatically, it comes back only when the mouse reaches the screen edge under the taskbar, instead of anywhere along that edge. The rest of the edge is left to the windows behind it. Default is on. | Boolean (true/false) |
