@@ -969,12 +969,17 @@ std::atomic<int64_t> g_last_geometry_critical_apply_ms = 0;
 std::atomic<bool> g_animation_followup_worker_running = false;
 std::atomic<int64_t> g_suppress_low_priority_apply_until_ms = 0;
 std::atomic<bool> g_worker_threads_stopping = false;
+// Fork addition: Win32 threads rather than std::thread, like
+// g_notificationCenterHookWaitThread. A std::thread still joinable when this
+// DLL's globals are destroyed at process exit calls std::terminate, and
+// Explorer's short-lived helper processes exited that way, logged as
+// libc++.whl 0x40000015 crashes.
 std::mutex g_delayed_apply_worker_thread_mutex;
-std::thread g_delayed_apply_worker_thread;
+HANDLE g_delayed_apply_worker_thread = nullptr;
 std::mutex g_delayed_apply_worker_wait_mutex;
 std::condition_variable g_delayed_apply_worker_wake;
 std::mutex g_animation_followup_worker_thread_mutex;
-std::thread g_animation_followup_worker_thread;
+HANDLE g_animation_followup_worker_thread = nullptr;
 constexpr int kDefaultStyleDebounceDelayMs = 150;
 constexpr int kTaskbarIslandAnimationDurationMs = 250;
 constexpr int kStartButtonAnchorStablePassesRequired = 2;
@@ -1395,6 +1400,23 @@ bool WaitForConditionWithTimeout(std::function<bool()> condition,
   }
   return true;
 }
+// Fork addition: waits for a worker thread to finish and closes its handle.
+void JoinWorkerThreadTai(HANDLE& thread) {
+  if (thread) {
+    WaitForSingleObject(thread, INFINITE);
+    CloseHandle(thread);
+    thread = nullptr;
+  }
+}
+// Fork addition: wakes DelayedApplyWorker once its due time or the stop flag
+// has changed. The worker checks both while holding
+// g_delayed_apply_worker_wait_mutex, then waits. Taking the mutex first means
+// the worker has either not checked yet or is already waiting, so the wake-up
+// can't slip in between and be lost, leaving it asleep.
+void WakeDelayedApplyWorkerTai() {
+  { std::lock_guard<std::mutex> lock(g_delayed_apply_worker_wait_mutex); }
+  g_delayed_apply_worker_wake.notify_all();
+}
 void QueueTaskbarAnimationFollowup(HWND hTaskbarWnd) {
   if (g_unloading || g_worker_threads_stopping.load() ||
       !hTaskbarWnd || !IsWindow(hTaskbarWnd)) {
@@ -1410,12 +1432,11 @@ void QueueTaskbarAnimationFollowup(HWND hTaskbarWnd) {
     g_animation_followup_worker_running = false;
     return;
   }
-  if (g_animation_followup_worker_thread.joinable()) {
-    g_animation_followup_worker_thread.join();
-  }
+  JoinWorkerThreadTai(g_animation_followup_worker_thread);
 
-  try {
-    g_animation_followup_worker_thread = std::thread([hTaskbarWnd]() {
+  g_animation_followup_worker_thread = CreateThread(
+    nullptr, 0, [](LPVOID parameter) -> DWORD {
+      HWND hTaskbarWnd = static_cast<HWND>(parameter);
       struct FollowupWorkerGuard {
         ~FollowupWorkerGuard() { g_animation_followup_worker_running = false; }
       } followupWorkerGuard;
@@ -1440,13 +1461,11 @@ void QueueTaskbarAnimationFollowup(HWND hTaskbarWnd) {
       } catch (...) {
         Wh_Log(L"Animation follow-up worker failed: %08X", winrt::to_hresult());
       }
-    });
-  } catch (std::exception const& ex) {
+      return 0;
+    }, hTaskbarWnd, 0, nullptr);
+  if (!g_animation_followup_worker_thread) {
     g_animation_followup_worker_running = false;
-    Wh_Log(L"Failed to create animation follow-up worker: %S", ex.what());
-  } catch (...) {
-    g_animation_followup_worker_running = false;
-    Wh_Log(L"Failed to create animation follow-up worker");
+    Wh_Log(L"Failed to create animation follow-up worker: %lu", GetLastError());
   }
 }
 
@@ -1463,23 +1482,22 @@ void EnsureDelayedApplyWorker() {
       g_delayed_apply_worker_running = false;
       return;
     }
-    if (g_delayed_apply_worker_thread.joinable()) {
-      g_delayed_apply_worker_thread.join();
-    }
-    try {
-      g_delayed_apply_worker_thread = std::thread(DelayedApplyWorker);
-    } catch (std::exception const& ex) {
+    JoinWorkerThreadTai(g_delayed_apply_worker_thread);
+    g_delayed_apply_worker_thread = CreateThread(
+        nullptr, 0,
+        [](LPVOID) -> DWORD {
+          DelayedApplyWorker();
+          return 0;
+        },
+        nullptr, 0, nullptr);
+    if (!g_delayed_apply_worker_thread) {
       g_delayed_apply_worker_running = false;
-      Wh_Log(L"Failed to create delayed apply worker: %S", ex.what());
-      return;
-    } catch (...) {
-      g_delayed_apply_worker_running = false;
-      Wh_Log(L"Failed to create delayed apply worker");
+      Wh_Log(L"Failed to create delayed apply worker: %lu", GetLastError());
       return;
     }
   }
 
-  g_delayed_apply_worker_wake.notify_one();
+  WakeDelayedApplyWorkerTai();
 }
 
 void RequestTaskbarButtonSizeRelayout() {
@@ -1525,26 +1543,23 @@ void CleanupDebounce() {
   g_scheduled_low_priority_update = false;
   g_delayed_apply_due_ms = 0;
   g_delayed_apply_generation.fetch_add(1);
-  g_delayed_apply_worker_wake.notify_all();
+  WakeDelayedApplyWorkerTai();
 
-  std::thread animationFollowupWorker;
+  HANDLE animationFollowupWorker;
   {
     std::lock_guard<std::mutex> lock(g_animation_followup_worker_thread_mutex);
-    animationFollowupWorker = std::move(g_animation_followup_worker_thread);
+    animationFollowupWorker =
+        std::exchange(g_animation_followup_worker_thread, nullptr);
   }
 
-  std::thread delayedApplyWorker;
+  HANDLE delayedApplyWorker;
   {
     std::lock_guard<std::mutex> lock(g_delayed_apply_worker_thread_mutex);
-    delayedApplyWorker = std::move(g_delayed_apply_worker_thread);
+    delayedApplyWorker = std::exchange(g_delayed_apply_worker_thread, nullptr);
   }
 
-  if (animationFollowupWorker.joinable()) {
-    animationFollowupWorker.join();
-  }
-  if (delayedApplyWorker.joinable()) {
-    delayedApplyWorker.join();
-  }
+  JoinWorkerThreadTai(animationFollowupWorker);
+  JoinWorkerThreadTai(delayedApplyWorker);
 
   g_animation_followup_worker_running = false;
   g_delayed_apply_worker_running = false;
@@ -3192,6 +3207,9 @@ void UpdateGlobalSettings() {
   g_settings.userDefinedAutoHideShowUnderTaskbarOnly = (getInt(L"AutoHideShowUnderTaskbarOnly") != 0) && !g_unloading;
   g_settings.userDefinedCustomizeTaskbarBackground = (getInt(L"CustomizeTaskbarBackground") != 0);
   g_settings.userDefinedDisableCustomBlurBackground = (getInt(L"DisableCustomBlurBackground") != 0);
+  // Fork addition: see OpenPopupLogFileTai.
+  g_logFlyoutPlacementTai.store(getInt(L"LogFlyoutPlacement") != 0,
+                                std::memory_order_relaxed);
   PCWSTR appsDividerAlignment = Wh_GetStringSetting(L"AppsDividerAlignment");
   g_settings.userDefinedDividerLeftAligned =
       appsDividerAlignment && _wcsicmp(appsDividerAlignment, L"left") == 0;
@@ -5885,25 +5903,34 @@ std::wstring GetProcessExeName(DWORD processId) {
   return result;
 }
 BOOL WINAPI SetWindowPos_Hook(HWND hWnd, HWND hWndInsertAfter, int X, int Y, int cx, int cy, UINT uFlags) {
-  DWORD processId = 0;
-  const bool userDefinedMoveFlyoutControlCenter =
-      Wh_GetIntSetting(L"MoveFlyoutControlCenter") != 0;
   auto callOriginal = [&]() -> BOOL {
     return SetWindowPos_Original
         ? SetWindowPos_Original(hWnd, hWndInsertAfter, X, Y, cx, cy, uFlags)
         : FALSE;
   };
-  if (!hWnd || !GetWindowThreadProcessId(hWnd, &processId)) {
+  // Fork addition: this hook sees every SetWindowPos in every process the mod
+  // loads into, and Explorer's UI threads make them all the time. Only three
+  // kinds of window are changed below, so the window class is checked first.
+  // Settings are read from the registry on every call and the process name
+  // needs OpenProcess, so both wait for a window of one of those classes.
+  WCHAR className[64];
+  if (g_unloading || !hWnd ||
+      !GetClassNameW(hWnd, className, ARRAYSIZE(className))) {
     return callOriginal();
   }
-  WCHAR className[256] = L"<unknown>";
-  GetClassNameW(hWnd, className, ARRAYSIZE(className));
-  const std::wstring windowClassName = className;
-  const std::wstring processFileName = GetProcessExeName(processId);
-  Wh_Log(L"[SetWindowPos] PID: %lu | EXE: %s | Class: %s | HWND: 0x%p | Pos: (%d,%d) Size: %dx%d Flags: 0x%08X",
+  const bool isInputSwitch =
+      _wcsicmp(className, L"Shell_InputSwitchTopLevelWindow") == 0;
+  const bool isControlCenter = _wcsicmp(className, L"ControlCenterWindow") == 0;
+  const bool isTaskbar = _wcsicmp(className, L"Shell_TrayWnd") == 0 ||
+                         _wcsicmp(className, L"Shell_SecondaryTrayWnd") == 0;
+  DWORD processId = 0;
+  if ((!isInputSwitch && !isControlCenter && !isTaskbar) ||
+      !GetWindowThreadProcessId(hWnd, &processId)) {
+    return callOriginal();
+  }
+  Wh_Log(L"[SetWindowPos] PID: %lu | Class: %s | HWND: 0x%p | Pos: (%d,%d) Size: %dx%d Flags: 0x%08X",
          processId,
-         processFileName.c_str(),
-         windowClassName.c_str(),
+         className,
          hWnd,
          X,
          Y,
@@ -5911,13 +5938,13 @@ BOOL WINAPI SetWindowPos_Hook(HWND hWnd, HWND hWndInsertAfter, int X, int Y, int
          cy,
          uFlags);
   // Fork addition: see g_languageIndicatorCentersXDip.
-  if (!g_unloading && !(uFlags & SWP_NOMOVE) &&
+  if (isInputSwitch && !(uFlags & SWP_NOMOVE) &&
       processId == GetCurrentProcessId() &&
-      _wcsicmp(windowClassName.c_str(), L"Shell_InputSwitchTopLevelWindow") == 0 &&
       Wh_GetIntSetting(L"MoveFlyoutKeyboardLayout") != 0) {
     X = PlaceInputSwitchFlyoutXTai(hWnd, X, Y, cx, cy, uFlags);
   }
-  if (!g_unloading && userDefinedMoveFlyoutControlCenter && _wcsicmp(processFileName.c_str(), L"ShellHost.exe") == 0 && _wcsicmp(windowClassName.c_str(), L"ControlCenterWindow") == 0) {
+  if (isControlCenter && Wh_GetIntSetting(L"MoveFlyoutControlCenter") != 0 &&
+      _wcsicmp(GetProcessExeName(processId).c_str(), L"ShellHost.exe") == 0) {
     HMONITOR monitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
     if (!monitor) {
       return callOriginal();
@@ -5947,10 +5974,8 @@ BOOL WINAPI SetWindowPos_Hook(HWND hWnd, HWND hWndInsertAfter, int X, int Y, int
     }
   }
   // Fork addition: see TaskbarRevealZoneTai.
-  if (!g_unloading && !(uFlags & SWP_NOMOVE) &&
-      processId == GetCurrentProcessId() &&
-      (_wcsicmp(windowClassName.c_str(), L"Shell_TrayWnd") == 0 ||
-       _wcsicmp(windowClassName.c_str(), L"Shell_SecondaryTrayWnd") == 0)) {
+  if (isTaskbar && !(uFlags & SWP_NOMOVE) &&
+      processId == GetCurrentProcessId()) {
     const BOOL result = callOriginal();
     if (result) {
       ApplyTaskbarRevealZoneAfterMoveTai(hWnd);
@@ -5995,8 +6020,42 @@ bool IsOldTaiModEnabledTai() {
   RegCloseKey(key);
   return status != ERROR_SUCCESS || disabled == 0;
 }
+// Fork addition: besides the shell, Explorer runs short-lived helper
+// processes, for example to open an app from shell:AppsFolder or to host
+// folder windows, and they exit within a minute. The mod has nothing to do
+// there, but it hooked them and started its threads. So a process started with
+// arguments while another explorer.exe owns the taskbar is skipped. The shell
+// is started without arguments, so it isn't skipped even if it sees the old
+// shell's taskbar for a moment after that one was killed. Some helpers have
+// no arguments either; they still load the mod.
+bool IsExplorerHelperProcessTai() {
+  PCWSTR args = GetCommandLineW();
+  // Skip the program path, quoted or not.
+  if (*args == L'"') {
+    PCWSTR closingQuote = wcschr(args + 1, L'"');
+    args = closingQuote ? closingQuote + 1 : L"";
+  } else {
+    while (*args && *args != L' ' && *args != L'\t') {
+      args++;
+    }
+  }
+  while (*args == L' ' || *args == L'\t') {
+    args++;
+  }
+  if (!*args) {
+    return false;
+  }
+  HWND taskbar = FindWindowW(L"Shell_TrayWnd", nullptr);
+  DWORD taskbarProcessId = 0;
+  return taskbar && GetWindowThreadProcessId(taskbar, &taskbarProcessId) &&
+         taskbarProcessId != GetCurrentProcessId();
+}
 BOOL Wh_ModInit() {
   Wh_Log(L"======================================================");
+  if (IsExplorer() && IsExplorerHelperProcessTai()) {
+    Wh_Log(L"Not loading: this explorer.exe is a helper process, not the shell");
+    return FALSE;
+  }
   if (IsOldTaiModEnabledTai()) {
     Wh_Log(L"Not loading: TAI under its old mod ID (taskbar-dock-like) is "
            L"installed and enabled. Remove or disable it in Windhawk, then "

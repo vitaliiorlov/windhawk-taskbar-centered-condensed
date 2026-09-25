@@ -2,7 +2,7 @@
 // @id              taskbar-dock-like-vo
 // @name            TAI (taskbar as island) for Windows 11 - vo fork
 // @description     Centers and floats the taskbar as an animated dock. Fork changes are listed under Details.
-// @version         1.5.272-vo
+// @version         1.5.273-vo
 // @author          vitaliiorlov (fork of DarkionAvey)
 // @github          https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed
 // @include         explorer.exe
@@ -66,12 +66,14 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    an on/off toggle for the Notification Center but nothing that scopes it by
 >    monitor.
 >
-> 3. **Flyout placement is mirrored to a log file.**
->    One line per flyout open, appended to `windhawk_popup_log.txt` under
->    `%TEMP%`, so multi-monitor and mixed-DPI placement can be diagnosed
->    without attaching DebugView. The Start menu, Search and Notification
->    Center lines show where Windows put the window and where it was moved;
->    repairs to a taskbar (see 11) are logged there too.
+> 3. **Flyout placement can be mirrored to a log file.**
+>    With the `LogFlyoutPlacement` setting on (off by default), one line per
+>    flyout open is appended to `windhawk_popup_log.txt` under `%TEMP%`, so
+>    multi-monitor and mixed-DPI placement can be diagnosed without attaching
+>    DebugView. The Start menu, Search and Notification Center lines show
+>    where Windows put the window and where it was moved; repairs to a taskbar
+>    (see 11) are logged there too. At 1 MB the file is renamed
+>    `windhawk_popup_log.old.txt` and a new one is started.
 >
 > 4. **The keyboard layout flyout opens above the language indicator.**
 >    Clicking the language indicator (or pressing Win+Space) opens a flyout
@@ -179,6 +181,32 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >     any display scale. The progress bar some apps show on their button gets
 >     the same move.
 >
+> 13. **Start no longer freezes waiting on a flyout.**
+>     Start could freeze until Explorer was restarted, mostly on opening
+>     Settings from it. Just before Explorer shows the Start menu, Search or
+>     the Notification Center, the mod moves the window, which belongs to
+>     another process, and `SetWindowPos` waits, with no time limit, for that
+>     process to handle the move. When it didn't, for example while it was
+>     suspended, the Explorer thread that shows Start and launches apps was
+>     stuck with it. The fork now queues the move, as Windows does for these
+>     windows, and gives the flyout at most 250 ms to catch up before it is
+>     shown. Builds since September 2026 also moved each flyout as it hid, to
+>     where it already was, on every Start close and app launch; hiding
+>     flyouts are left alone again, as in upstream TAI. And the mod's
+>     `SetWindowPos` hook, which sees every window move in Explorer, now
+>     reads settings and process names only for the windows it changes.
+>
+> 14. **Explorer's helper processes no longer crash on exit.**
+>     Explorer starts short-lived helper processes, for example to open an
+>     app from `shell:AppsFolder` or to host folder windows, and the mod
+>     loaded into each one. A `std::thread` still joinable at exit ends the
+>     process with `std::terminate`, so every helper exit was logged as a
+>     crash: about 200 `Application Error` events a month for `explorer.exe`,
+>     module `libc++.whl`, code `0x40000015`, each with a crash dump. The
+>     shell itself was not affected. The mod's worker threads are now plain
+>     Windows threads, and a helper started with arguments while another
+>     Explorer owns the taskbar skips the mod altogether.
+>
 > Everything else — the island auto-scaling, the WindhawkBlur engine, the
 > Y-above-taskbar clamp and Notification-Center detection — is upstream's
 > code, used as-is. Earlier versions of this fork carried their own
@@ -279,6 +307,7 @@ modify the source files in the `mod-parts` directory.
 | `MoveTrayContextMenus` | Move tray icon menus with Taskbar | When enabled, the right-click menus of the clock and the system tray icons (network, volume, battery, language) open at the right end of the taskbar, lined up with the Notification Center, instead of at the right edge of the screen. Default is on. | Boolean (true/false) |
 | `StartMenuOnActiveMonitor` | Open Start on the monitor in use | When enabled, the Start menu opened with the Win key (or Ctrl+Esc) opens on the monitor of the window you are working in, or the one under the mouse when the desktop or a taskbar has focus, instead of always on the main display. A taskbar's Start button already opens it on that taskbar's monitor. Only monitors with a taskbar are used. Default is on. | Boolean (true/false) |
 | `AutoHideShowUnderTaskbarOnly` | Show an auto-hidden taskbar only from under it | When the taskbar hides automatically, it comes back only when the mouse reaches the screen edge under the taskbar, instead of anywhere along that edge. The rest of the edge is left to the windows behind it. Default is on. | Boolean (true/false) |
+| `LogFlyoutPlacement` | Log flyout placement to a file | When enabled, a line is added to windhawk_popup_log.txt in %TEMP% each time the Start menu, Search, a flyout or a taskbar menu is placed, to help diagnose placement bugs. At 1 MB the file is renamed windhawk_popup_log.old.txt and a new one is started. Default is off. | Boolean (true/false) |
 */
 // ==/WindhawkModReadme==
 // ==WindhawkModSettings==
@@ -408,6 +437,9 @@ modify the source files in the `mod-parts` directory.
 - AutoHideShowUnderTaskbarOnly: true
   $name: Show an auto-hidden taskbar only from under it
   $description: When the taskbar hides automatically, it comes back only when the mouse reaches the screen edge under the taskbar, instead of anywhere along that edge. The rest of the edge is left to the windows behind it. Default is on.
+- LogFlyoutPlacement: false
+  $name: Log flyout placement to a file
+  $description: When enabled, a line is added to windhawk_popup_log.txt in %TEMP% each time the Start menu, Search, a flyout or a taskbar menu is placed, to help diagnose placement bugs. At 1 MB the file is renamed windhawk_popup_log.old.txt and a new one is started. Default is off.
 */
 // ==/WindhawkModSettings==
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -817,9 +849,8 @@ static HMONITOR GetFlyoutLayoutMonitorTai(HWND flyoutWindow) {
 enum class FlyoutKindTai { StartMenu, Search, NotificationCenter };
 static std::atomic<uintptr_t> g_lastStartMenuMonitorTai{0};
 static std::atomic<ULONGLONG> g_lastStartMenuTimeTai{0};
-// showing is false when the window is being hidden.
-HMONITOR ResolveFlyoutMonitorTai(HWND flyoutWindow, FlyoutKindTai kind,
-                                 bool showing) {
+// Called as a flyout is shown; the DWM hook leaves hides alone.
+HMONITOR ResolveFlyoutMonitorTai(HWND flyoutWindow, FlyoutKindTai kind) {
   // Fork addition. The guesses further down take the monitor of a taskbar
   // under the cursor. Search needs them: Windows opens it on the monitor the
   // Start menu last used (SearchAppDesktopExperienceView asks the launcher),
@@ -833,7 +864,7 @@ HMONITOR ResolveFlyoutMonitorTai(HWND flyoutWindow, FlyoutKindTai kind,
   constexpr ULONGLONG kStartMenuSearchPaneTtlMs = 500;
   if (kind != FlyoutKindTai::Search) {
     if (HMONITOR monitor = GetFlyoutLayoutMonitorTai(flyoutWindow)) {
-      if (kind == FlyoutKindTai::StartMenu && showing) {
+      if (kind == FlyoutKindTai::StartMenu) {
         g_lastStartMenuMonitorTai.store(reinterpret_cast<uintptr_t>(monitor),
                                         std::memory_order_release);
         g_lastStartMenuTimeTai.store(GetTickCount64(),
@@ -879,6 +910,27 @@ HMONITOR ResolveFlyoutMonitorTai(HWND flyoutWindow, FlyoutKindTai kind,
   return flyoutWindow
              ? MonitorFromWindow(flyoutWindow, MONITOR_DEFAULTTONEAREST)
              : nullptr;
+}
+// Fork addition: the DWM hook moves the Start menu, Search and Notification
+// Center windows, which belong to other processes, just before Explorer shows
+// them. A plain SetWindowPos on another thread's window waits, with no time
+// limit, until that thread handles it. The hook runs on an Explorer thread
+// that Start and app launches wait on, so a flyout process that was suspended,
+// or itself waiting on Explorer, could freeze Start until Explorer was
+// restarted; twice Start froze right after Search was placed. So the move is
+// queued, as Windows queues its own moves of these windows. Then a WM_NULL
+// gives the window's thread a short while to catch up. Both are handled when
+// the thread next reads its messages, so once it answers, the move has landed
+// or lands a fraction of a millisecond later, well before the window's first
+// frame. A thread that doesn't answer in time applies the move when it runs
+// again. While waiting, this thread handles messages sent to it, as it did
+// inside SetWindowPos.
+void MoveFlyoutWindowTai(HWND window, int x, int y, int cx, int cy) {
+  constexpr UINT kCatchUpTimeoutMs = 250;
+  SetWindowPos(window, nullptr, x, y, cx, cy,
+               SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+  SendMessageTimeoutW(window, WM_NULL, 0, 0, SMTO_NORMAL | SMTO_ABORTIFHUNG,
+                      kCatchUpTimeoutMs, nullptr);
 }
 // Fork addition: xamlRootIdentity is the COM identity of the taskbar XAML being
 // styled. States are filed by monitor name, but the taskbar behind a name can
@@ -1033,13 +1085,36 @@ bool TryCalculateFlyoutYAboveTaskbar(const MONITORINFO& monitorInfo,
 // and mixed-DPI issues can be diagnosed without DebugView attached. One line is
 // appended per flyout open to %TEMP%\windhawk_popup_log.txt. Failures are
 // silent by design -- diagnostics must never affect placement behaviour.
+//
+// Only while the LogFlyoutPlacement setting is on: the lines are written on
+// Explorer's UI threads, about one a frame while the Notification Center opens.
+// At 1 MB the file becomes windhawk_popup_log.old.txt, replacing the last one,
+// and a new file is started.
+std::atomic<bool> g_logFlyoutPlacementTai{false};
+// Held while a line is written, so two threads never rename the file at once.
+static std::mutex g_popupLogMutexTai;
+// The caller holds g_popupLogMutexTai.
 static FILE* OpenPopupLogFileTai() {
-  WCHAR logPath[MAX_PATH];
-  if (!GetEnvironmentVariableW(L"TEMP", logPath, MAX_PATH)) {
+  if (!g_logFlyoutPlacementTai.load(std::memory_order_relaxed)) {
     return nullptr;
   }
-  if (wcscat_s(logPath, MAX_PATH, L"\\windhawk_popup_log.txt") != 0) {
+  WCHAR logPath[MAX_PATH];
+  const DWORD tempLength = GetEnvironmentVariableW(L"TEMP", logPath, MAX_PATH);
+  if (!tempLength || tempLength >= MAX_PATH) {
     return nullptr;
+  }
+  WCHAR oldLogPath[MAX_PATH];
+  if (wcscpy_s(oldLogPath, MAX_PATH, logPath) != 0 ||
+      wcscat_s(logPath, MAX_PATH, L"\\windhawk_popup_log.txt") != 0 ||
+      wcscat_s(oldLogPath, MAX_PATH, L"\\windhawk_popup_log.old.txt") != 0) {
+    return nullptr;
+  }
+  constexpr ULONGLONG kMaxLogBytes = 1024 * 1024;
+  WIN32_FILE_ATTRIBUTE_DATA attributes{};
+  if (GetFileAttributesExW(logPath, GetFileExInfoStandard, &attributes) &&
+      ((static_cast<ULONGLONG>(attributes.nFileSizeHigh) << 32) |
+       attributes.nFileSizeLow) >= kMaxLogBytes) {
+    MoveFileExW(logPath, oldLogPath, MOVEFILE_REPLACE_EXISTING);
   }
   FILE* f = nullptr;
   if (_wfopen_s(&f, logPath, L"a, ccs=UTF-8") != 0) {
@@ -1063,6 +1138,7 @@ void LogFlyoutPlacementToFileTai(PCWSTR stage,
                                  float lastStartButtonXCalculated,
                                  float lastRootWidth,
                                  float lastTargetWidth) {
+  std::lock_guard<std::mutex> lock(g_popupLogMutexTai);
   FILE* f = OpenPopupLogFileTai();
   if (!f) {
     return;
@@ -1099,6 +1175,7 @@ void LogInputSwitchPlacementToFileTai(PCWSTR monitorName,
                                       int y,
                                       int cx,
                                       int cy) {
+  std::lock_guard<std::mutex> lock(g_popupLogMutexTai);
   FILE* f = OpenPopupLogFileTai();
   if (!f) {
     return;
@@ -1126,6 +1203,7 @@ void LogNotificationCenterPlacementToFileTai(PCWSTR monitorName,
                                              int trayRightDip,
                                              RECT const& viewRect,
                                              int placedX) {
+  std::lock_guard<std::mutex> lock(g_popupLogMutexTai);
   FILE* f = OpenPopupLogFileTai();
   if (!f) {
     return;
@@ -1163,6 +1241,7 @@ void LogContextMenuPlacementToFileTai(PCWSTR menu,
                                       float windowsY,
                                       float placedX,
                                       float placedY) {
+  std::lock_guard<std::mutex> lock(g_popupLogMutexTai);
   FILE* f = OpenPopupLogFileTai();
   if (!f) {
     return;
@@ -1184,6 +1263,7 @@ void LogContextMenuPlacementToFileTai(PCWSTR menu,
 // Fork addition: things the mod did to a taskbar window as a whole rather than
 // to a flyout: event names what happened, detail the specifics.
 void LogTaskbarEventToFileTai(PCWSTR event, PCWSTR detail) {
+  std::lock_guard<std::mutex> lock(g_popupLogMutexTai);
   FILE* f = OpenPopupLogFileTai();
   if (!f) {
     return;
@@ -5194,6 +5274,9 @@ HRESULT WINAPI DwmSetWindowAttribute_Hook(HWND hwnd,
     }
     BOOL cloak = *(BOOL*)pvAttribute;
     Wh_Log(L"> %08X %s", (DWORD)(DWORD_PTR)hwnd, cloak ? L"cloak" : L"uncloak");
+    if (cloak) {
+        return original();
+    }
     DWORD processId = 0;
     if (!hwnd || !GetWindowThreadProcessId(hwnd, &processId)) {
         return original();
@@ -5225,8 +5308,7 @@ HRESULT WINAPI DwmSetWindowAttribute_Hook(HWND hwnd,
     HMONITOR monitor = ResolveFlyoutMonitorTai(
         hwnd, target == DwmTarget::StartMenu    ? FlyoutKindTai::StartMenu
               : target == DwmTarget::SearchHost ? FlyoutKindTai::Search
-                                                : FlyoutKindTai::NotificationCenter,
-        !cloak);
+                                                : FlyoutKindTai::NotificationCenter);
     UINT monitorDpiX = 96;
     UINT monitorDpiY = 96;
     if (!monitor ||
@@ -5370,7 +5452,7 @@ LogFlyoutPlacementToFileTai(L"Recalc", monitorName.c_str(), static_cast<int>(tar
                             taskbarState.lastStartButtonXCalculated,
                             taskbarState.lastRootWidth,
                             taskbarState.lastTargetWidth);
-SetWindowPos(hwnd, nullptr, x, y, cx, cy, SWP_NOZORDER | SWP_NOACTIVATE);
+MoveFlyoutWindowTai(hwnd, x, y, cx, cy);
     return original();
 }
 namespace StartMenuUI {
@@ -7242,12 +7324,17 @@ std::atomic<int64_t> g_last_geometry_critical_apply_ms = 0;
 std::atomic<bool> g_animation_followup_worker_running = false;
 std::atomic<int64_t> g_suppress_low_priority_apply_until_ms = 0;
 std::atomic<bool> g_worker_threads_stopping = false;
+// Fork addition: Win32 threads rather than std::thread, like
+// g_notificationCenterHookWaitThread. A std::thread still joinable when this
+// DLL's globals are destroyed at process exit calls std::terminate, and
+// Explorer's short-lived helper processes exited that way, logged as
+// libc++.whl 0x40000015 crashes.
 std::mutex g_delayed_apply_worker_thread_mutex;
-std::thread g_delayed_apply_worker_thread;
+HANDLE g_delayed_apply_worker_thread = nullptr;
 std::mutex g_delayed_apply_worker_wait_mutex;
 std::condition_variable g_delayed_apply_worker_wake;
 std::mutex g_animation_followup_worker_thread_mutex;
-std::thread g_animation_followup_worker_thread;
+HANDLE g_animation_followup_worker_thread = nullptr;
 constexpr int kDefaultStyleDebounceDelayMs = 150;
 constexpr int kTaskbarIslandAnimationDurationMs = 250;
 constexpr int kStartButtonAnchorStablePassesRequired = 2;
@@ -7634,6 +7721,23 @@ bool WaitForConditionWithTimeout(std::function<bool()> condition,
   }
   return true;
 }
+// Fork addition: waits for a worker thread to finish and closes its handle.
+void JoinWorkerThreadTai(HANDLE& thread) {
+  if (thread) {
+    WaitForSingleObject(thread, INFINITE);
+    CloseHandle(thread);
+    thread = nullptr;
+  }
+}
+// Fork addition: wakes DelayedApplyWorker once its due time or the stop flag
+// has changed. The worker checks both while holding
+// g_delayed_apply_worker_wait_mutex, then waits. Taking the mutex first means
+// the worker has either not checked yet or is already waiting, so the wake-up
+// can't slip in between and be lost, leaving it asleep.
+void WakeDelayedApplyWorkerTai() {
+  { std::lock_guard<std::mutex> lock(g_delayed_apply_worker_wait_mutex); }
+  g_delayed_apply_worker_wake.notify_all();
+}
 void QueueTaskbarAnimationFollowup(HWND hTaskbarWnd) {
   if (g_unloading || g_worker_threads_stopping.load() ||
       !hTaskbarWnd || !IsWindow(hTaskbarWnd)) {
@@ -7648,11 +7752,10 @@ void QueueTaskbarAnimationFollowup(HWND hTaskbarWnd) {
     g_animation_followup_worker_running = false;
     return;
   }
-  if (g_animation_followup_worker_thread.joinable()) {
-    g_animation_followup_worker_thread.join();
-  }
-  try {
-    g_animation_followup_worker_thread = std::thread([hTaskbarWnd]() {
+  JoinWorkerThreadTai(g_animation_followup_worker_thread);
+  g_animation_followup_worker_thread = CreateThread(
+    nullptr, 0, [](LPVOID parameter) -> DWORD {
+      HWND hTaskbarWnd = static_cast<HWND>(parameter);
       struct FollowupWorkerGuard {
         ~FollowupWorkerGuard() { g_animation_followup_worker_running = false; }
       } followupWorkerGuard;
@@ -7677,13 +7780,11 @@ void QueueTaskbarAnimationFollowup(HWND hTaskbarWnd) {
       } catch (...) {
         Wh_Log(L"Animation follow-up worker failed: %08X", winrt::to_hresult());
       }
-    });
-  } catch (std::exception const& ex) {
+      return 0;
+    }, hTaskbarWnd, 0, nullptr);
+  if (!g_animation_followup_worker_thread) {
     g_animation_followup_worker_running = false;
-    Wh_Log(L"Failed to create animation follow-up worker: %S", ex.what());
-  } catch (...) {
-    g_animation_followup_worker_running = false;
-    Wh_Log(L"Failed to create animation follow-up worker");
+    Wh_Log(L"Failed to create animation follow-up worker: %lu", GetLastError());
   }
 }
 void DelayedApplyWorker();
@@ -7698,22 +7799,21 @@ void EnsureDelayedApplyWorker() {
       g_delayed_apply_worker_running = false;
       return;
     }
-    if (g_delayed_apply_worker_thread.joinable()) {
-      g_delayed_apply_worker_thread.join();
-    }
-    try {
-      g_delayed_apply_worker_thread = std::thread(DelayedApplyWorker);
-    } catch (std::exception const& ex) {
+    JoinWorkerThreadTai(g_delayed_apply_worker_thread);
+    g_delayed_apply_worker_thread = CreateThread(
+        nullptr, 0,
+        [](LPVOID) -> DWORD {
+          DelayedApplyWorker();
+          return 0;
+        },
+        nullptr, 0, nullptr);
+    if (!g_delayed_apply_worker_thread) {
       g_delayed_apply_worker_running = false;
-      Wh_Log(L"Failed to create delayed apply worker: %S", ex.what());
-      return;
-    } catch (...) {
-      g_delayed_apply_worker_running = false;
-      Wh_Log(L"Failed to create delayed apply worker");
+      Wh_Log(L"Failed to create delayed apply worker: %lu", GetLastError());
       return;
     }
   }
-  g_delayed_apply_worker_wake.notify_one();
+  WakeDelayedApplyWorkerTai();
 }
 void RequestTaskbarButtonSizeRelayout() {
   if (g_unloading) {
@@ -7754,23 +7854,20 @@ void CleanupDebounce() {
   g_scheduled_low_priority_update = false;
   g_delayed_apply_due_ms = 0;
   g_delayed_apply_generation.fetch_add(1);
-  g_delayed_apply_worker_wake.notify_all();
-  std::thread animationFollowupWorker;
+  WakeDelayedApplyWorkerTai();
+  HANDLE animationFollowupWorker;
   {
     std::lock_guard<std::mutex> lock(g_animation_followup_worker_thread_mutex);
-    animationFollowupWorker = std::move(g_animation_followup_worker_thread);
+    animationFollowupWorker =
+        std::exchange(g_animation_followup_worker_thread, nullptr);
   }
-  std::thread delayedApplyWorker;
+  HANDLE delayedApplyWorker;
   {
     std::lock_guard<std::mutex> lock(g_delayed_apply_worker_thread_mutex);
-    delayedApplyWorker = std::move(g_delayed_apply_worker_thread);
+    delayedApplyWorker = std::exchange(g_delayed_apply_worker_thread, nullptr);
   }
-  if (animationFollowupWorker.joinable()) {
-    animationFollowupWorker.join();
-  }
-  if (delayedApplyWorker.joinable()) {
-    delayedApplyWorker.join();
-  }
+  JoinWorkerThreadTai(animationFollowupWorker);
+  JoinWorkerThreadTai(delayedApplyWorker);
   g_animation_followup_worker_running = false;
   g_delayed_apply_worker_running = false;
 }
@@ -9265,6 +9362,9 @@ void UpdateGlobalSettings() {
   g_settings.userDefinedAutoHideShowUnderTaskbarOnly = (getInt(L"AutoHideShowUnderTaskbarOnly") != 0) && !g_unloading;
   g_settings.userDefinedCustomizeTaskbarBackground = (getInt(L"CustomizeTaskbarBackground") != 0);
   g_settings.userDefinedDisableCustomBlurBackground = (getInt(L"DisableCustomBlurBackground") != 0);
+  // Fork addition: see OpenPopupLogFileTai.
+  g_logFlyoutPlacementTai.store(getInt(L"LogFlyoutPlacement") != 0,
+                                std::memory_order_relaxed);
   PCWSTR appsDividerAlignment = Wh_GetStringSetting(L"AppsDividerAlignment");
   g_settings.userDefinedDividerLeftAligned =
       appsDividerAlignment && _wcsicmp(appsDividerAlignment, L"left") == 0;
@@ -11896,25 +11996,34 @@ std::wstring GetProcessExeName(DWORD processId) {
   return result;
 }
 BOOL WINAPI SetWindowPos_Hook(HWND hWnd, HWND hWndInsertAfter, int X, int Y, int cx, int cy, UINT uFlags) {
-  DWORD processId = 0;
-  const bool userDefinedMoveFlyoutControlCenter =
-      Wh_GetIntSetting(L"MoveFlyoutControlCenter") != 0;
   auto callOriginal = [&]() -> BOOL {
     return SetWindowPos_Original
         ? SetWindowPos_Original(hWnd, hWndInsertAfter, X, Y, cx, cy, uFlags)
         : FALSE;
   };
-  if (!hWnd || !GetWindowThreadProcessId(hWnd, &processId)) {
+  // Fork addition: this hook sees every SetWindowPos in every process the mod
+  // loads into, and Explorer's UI threads make them all the time. Only three
+  // kinds of window are changed below, so the window class is checked first.
+  // Settings are read from the registry on every call and the process name
+  // needs OpenProcess, so both wait for a window of one of those classes.
+  WCHAR className[64];
+  if (g_unloading || !hWnd ||
+      !GetClassNameW(hWnd, className, ARRAYSIZE(className))) {
     return callOriginal();
   }
-  WCHAR className[256] = L"<unknown>";
-  GetClassNameW(hWnd, className, ARRAYSIZE(className));
-  const std::wstring windowClassName = className;
-  const std::wstring processFileName = GetProcessExeName(processId);
-  Wh_Log(L"[SetWindowPos] PID: %lu | EXE: %s | Class: %s | HWND: 0x%p | Pos: (%d,%d) Size: %dx%d Flags: 0x%08X",
+  const bool isInputSwitch =
+      _wcsicmp(className, L"Shell_InputSwitchTopLevelWindow") == 0;
+  const bool isControlCenter = _wcsicmp(className, L"ControlCenterWindow") == 0;
+  const bool isTaskbar = _wcsicmp(className, L"Shell_TrayWnd") == 0 ||
+                         _wcsicmp(className, L"Shell_SecondaryTrayWnd") == 0;
+  DWORD processId = 0;
+  if ((!isInputSwitch && !isControlCenter && !isTaskbar) ||
+      !GetWindowThreadProcessId(hWnd, &processId)) {
+    return callOriginal();
+  }
+  Wh_Log(L"[SetWindowPos] PID: %lu | Class: %s | HWND: 0x%p | Pos: (%d,%d) Size: %dx%d Flags: 0x%08X",
          processId,
-         processFileName.c_str(),
-         windowClassName.c_str(),
+         className,
          hWnd,
          X,
          Y,
@@ -11922,13 +12031,13 @@ BOOL WINAPI SetWindowPos_Hook(HWND hWnd, HWND hWndInsertAfter, int X, int Y, int
          cy,
          uFlags);
   // Fork addition: see g_languageIndicatorCentersXDip.
-  if (!g_unloading && !(uFlags & SWP_NOMOVE) &&
+  if (isInputSwitch && !(uFlags & SWP_NOMOVE) &&
       processId == GetCurrentProcessId() &&
-      _wcsicmp(windowClassName.c_str(), L"Shell_InputSwitchTopLevelWindow") == 0 &&
       Wh_GetIntSetting(L"MoveFlyoutKeyboardLayout") != 0) {
     X = PlaceInputSwitchFlyoutXTai(hWnd, X, Y, cx, cy, uFlags);
   }
-  if (!g_unloading && userDefinedMoveFlyoutControlCenter && _wcsicmp(processFileName.c_str(), L"ShellHost.exe") == 0 && _wcsicmp(windowClassName.c_str(), L"ControlCenterWindow") == 0) {
+  if (isControlCenter && Wh_GetIntSetting(L"MoveFlyoutControlCenter") != 0 &&
+      _wcsicmp(GetProcessExeName(processId).c_str(), L"ShellHost.exe") == 0) {
     HMONITOR monitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
     if (!monitor) {
       return callOriginal();
@@ -11956,10 +12065,8 @@ BOOL WINAPI SetWindowPos_Hook(HWND hWnd, HWND hWndInsertAfter, int X, int Y, int
     }
   }
   // Fork addition: see TaskbarRevealZoneTai.
-  if (!g_unloading && !(uFlags & SWP_NOMOVE) &&
-      processId == GetCurrentProcessId() &&
-      (_wcsicmp(windowClassName.c_str(), L"Shell_TrayWnd") == 0 ||
-       _wcsicmp(windowClassName.c_str(), L"Shell_SecondaryTrayWnd") == 0)) {
+  if (isTaskbar && !(uFlags & SWP_NOMOVE) &&
+      processId == GetCurrentProcessId()) {
     const BOOL result = callOriginal();
     if (result) {
       ApplyTaskbarRevealZoneAfterMoveTai(hWnd);
@@ -12004,8 +12111,42 @@ bool IsOldTaiModEnabledTai() {
   RegCloseKey(key);
   return status != ERROR_SUCCESS || disabled == 0;
 }
+// Fork addition: besides the shell, Explorer runs short-lived helper
+// processes, for example to open an app from shell:AppsFolder or to host
+// folder windows, and they exit within a minute. The mod has nothing to do
+// there, but it hooked them and started its threads. So a process started with
+// arguments while another explorer.exe owns the taskbar is skipped. The shell
+// is started without arguments, so it isn't skipped even if it sees the old
+// shell's taskbar for a moment after that one was killed. Some helpers have
+// no arguments either; they still load the mod.
+bool IsExplorerHelperProcessTai() {
+  PCWSTR args = GetCommandLineW();
+  // Skip the program path, quoted or not.
+  if (*args == L'"') {
+    PCWSTR closingQuote = wcschr(args + 1, L'"');
+    args = closingQuote ? closingQuote + 1 : L"";
+  } else {
+    while (*args && *args != L' ' && *args != L'\t') {
+      args++;
+    }
+  }
+  while (*args == L' ' || *args == L'\t') {
+    args++;
+  }
+  if (!*args) {
+    return false;
+  }
+  HWND taskbar = FindWindowW(L"Shell_TrayWnd", nullptr);
+  DWORD taskbarProcessId = 0;
+  return taskbar && GetWindowThreadProcessId(taskbar, &taskbarProcessId) &&
+         taskbarProcessId != GetCurrentProcessId();
+}
 BOOL Wh_ModInit() {
   Wh_Log(L"======================================================");
+  if (IsExplorer() && IsExplorerHelperProcessTai()) {
+    Wh_Log(L"Not loading: this explorer.exe is a helper process, not the shell");
+    return FALSE;
+  }
   if (IsOldTaiModEnabledTai()) {
     Wh_Log(L"Not loading: TAI under its old mod ID (taskbar-dock-like) is "
            L"installed and enabled. Remove or disable it in Windhawk, then "

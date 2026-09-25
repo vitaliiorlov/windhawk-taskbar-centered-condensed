@@ -218,12 +218,25 @@ class StartButtonPosition(URLProcessor):
         )
 
     def _patch_dwm_targeting(self, patch: CppPatcher) -> None:
+        # Fork addition. ramensoftware v1.3.1 dropped this early return: its
+        # hook now handles Search alone and uses the hide to move Search back
+        # where Windows had it. The placement below replaces that logic and
+        # never needs the hide, where it only moved each window to the spot it
+        # already had, and overwrote the saved original X and width with the
+        # moved ones. Each of those moves also blocked the Explorer thread
+        # hiding Start, as when an app is launched from it (see
+        # MoveFlyoutWindowTai).
+        patch.insert_after_literal(
+            'Wh_Log(L"> %08X %s", (DWORD)(DWORD_PTR)hwnd, cloak ? L"cloak" : L"uncloak");',
+            "\n    if (cloak) {\n        return original();\n    }",
+            in_function="HRESULT WINAPI DwmSetWindowAttribute_Hook(",
+            label="leave hiding flyouts alone",
+        )
         resolve_monitor = (
             "HMONITOR monitor = ResolveFlyoutMonitorTai(\n"
             "        hwnd, target == DwmTarget::StartMenu    ? FlyoutKindTai::StartMenu\n"
             "              : target == DwmTarget::SearchHost ? FlyoutKindTai::Search\n"
-            "                                                : FlyoutKindTai::NotificationCenter,\n"
-            "        !cloak);"
+            "                                                : FlyoutKindTai::NotificationCenter);"
         )
         patch.replace_literal(
             "HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);",
@@ -313,6 +326,14 @@ class StartButtonPosition(URLProcessor):
             read_patch("startbuttonposition_start_menu_position_code.cpp")+ "\nSetWindowPos",
             count=1,
             label="replace SetWindowPos target branch",
+        )
+        # Fork addition: see MoveFlyoutWindowTai.
+        patch.replace_literal(
+            "SetWindowPos(hwnd, nullptr, x, y, cx, cy, SWP_NOZORDER | SWP_NOACTIVATE);",
+            "MoveFlyoutWindowTai(hwnd, x, y, cx, cy);",
+            count=1,
+            in_function="HRESULT WINAPI DwmSetWindowAttribute_Hook(",
+            label="move flyouts without waiting on them",
         )
         patch.remove_literal("margin.Right = 0;")
         patch.remove_literal("margin.Right = -width;")

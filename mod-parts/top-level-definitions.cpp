@@ -250,9 +250,8 @@ enum class FlyoutKindTai { StartMenu, Search, NotificationCenter };
 static std::atomic<uintptr_t> g_lastStartMenuMonitorTai{0};
 static std::atomic<ULONGLONG> g_lastStartMenuTimeTai{0};
 
-// showing is false when the window is being hidden.
-HMONITOR ResolveFlyoutMonitorTai(HWND flyoutWindow, FlyoutKindTai kind,
-                                 bool showing) {
+// Called as a flyout is shown; the DWM hook leaves hides alone.
+HMONITOR ResolveFlyoutMonitorTai(HWND flyoutWindow, FlyoutKindTai kind) {
   // Fork addition. The guesses further down take the monitor of a taskbar
   // under the cursor. Search needs them: Windows opens it on the monitor the
   // Start menu last used (SearchAppDesktopExperienceView asks the launcher),
@@ -266,7 +265,7 @@ HMONITOR ResolveFlyoutMonitorTai(HWND flyoutWindow, FlyoutKindTai kind,
   constexpr ULONGLONG kStartMenuSearchPaneTtlMs = 500;
   if (kind != FlyoutKindTai::Search) {
     if (HMONITOR monitor = GetFlyoutLayoutMonitorTai(flyoutWindow)) {
-      if (kind == FlyoutKindTai::StartMenu && showing) {
+      if (kind == FlyoutKindTai::StartMenu) {
         g_lastStartMenuMonitorTai.store(reinterpret_cast<uintptr_t>(monitor),
                                         std::memory_order_release);
         g_lastStartMenuTimeTai.store(GetTickCount64(),
@@ -315,6 +314,28 @@ HMONITOR ResolveFlyoutMonitorTai(HWND flyoutWindow, FlyoutKindTai kind,
   return flyoutWindow
              ? MonitorFromWindow(flyoutWindow, MONITOR_DEFAULTTONEAREST)
              : nullptr;
+}
+
+// Fork addition: the DWM hook moves the Start menu, Search and Notification
+// Center windows, which belong to other processes, just before Explorer shows
+// them. A plain SetWindowPos on another thread's window waits, with no time
+// limit, until that thread handles it. The hook runs on an Explorer thread
+// that Start and app launches wait on, so a flyout process that was suspended,
+// or itself waiting on Explorer, could freeze Start until Explorer was
+// restarted; twice Start froze right after Search was placed. So the move is
+// queued, as Windows queues its own moves of these windows. Then a WM_NULL
+// gives the window's thread a short while to catch up. Both are handled when
+// the thread next reads its messages, so once it answers, the move has landed
+// or lands a fraction of a millisecond later, well before the window's first
+// frame. A thread that doesn't answer in time applies the move when it runs
+// again. While waiting, this thread handles messages sent to it, as it did
+// inside SetWindowPos.
+void MoveFlyoutWindowTai(HWND window, int x, int y, int cx, int cy) {
+  constexpr UINT kCatchUpTimeoutMs = 250;
+  SetWindowPos(window, nullptr, x, y, cx, cy,
+               SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+  SendMessageTimeoutW(window, WM_NULL, 0, 0, SMTO_NORMAL | SMTO_ABORTIFHUNG,
+                      kCatchUpTimeoutMs, nullptr);
 }
 
 // Fork addition: xamlRootIdentity is the COM identity of the taskbar XAML being
@@ -484,13 +505,36 @@ bool TryCalculateFlyoutYAboveTaskbar(const MONITORINFO& monitorInfo,
 // and mixed-DPI issues can be diagnosed without DebugView attached. One line is
 // appended per flyout open to %TEMP%\windhawk_popup_log.txt. Failures are
 // silent by design -- diagnostics must never affect placement behaviour.
+//
+// Only while the LogFlyoutPlacement setting is on: the lines are written on
+// Explorer's UI threads, about one a frame while the Notification Center opens.
+// At 1 MB the file becomes windhawk_popup_log.old.txt, replacing the last one,
+// and a new file is started.
+std::atomic<bool> g_logFlyoutPlacementTai{false};
+// Held while a line is written, so two threads never rename the file at once.
+static std::mutex g_popupLogMutexTai;
+// The caller holds g_popupLogMutexTai.
 static FILE* OpenPopupLogFileTai() {
-  WCHAR logPath[MAX_PATH];
-  if (!GetEnvironmentVariableW(L"TEMP", logPath, MAX_PATH)) {
+  if (!g_logFlyoutPlacementTai.load(std::memory_order_relaxed)) {
     return nullptr;
   }
-  if (wcscat_s(logPath, MAX_PATH, L"\\windhawk_popup_log.txt") != 0) {
+  WCHAR logPath[MAX_PATH];
+  const DWORD tempLength = GetEnvironmentVariableW(L"TEMP", logPath, MAX_PATH);
+  if (!tempLength || tempLength >= MAX_PATH) {
     return nullptr;
+  }
+  WCHAR oldLogPath[MAX_PATH];
+  if (wcscpy_s(oldLogPath, MAX_PATH, logPath) != 0 ||
+      wcscat_s(logPath, MAX_PATH, L"\\windhawk_popup_log.txt") != 0 ||
+      wcscat_s(oldLogPath, MAX_PATH, L"\\windhawk_popup_log.old.txt") != 0) {
+    return nullptr;
+  }
+  constexpr ULONGLONG kMaxLogBytes = 1024 * 1024;
+  WIN32_FILE_ATTRIBUTE_DATA attributes{};
+  if (GetFileAttributesExW(logPath, GetFileExInfoStandard, &attributes) &&
+      ((static_cast<ULONGLONG>(attributes.nFileSizeHigh) << 32) |
+       attributes.nFileSizeLow) >= kMaxLogBytes) {
+    MoveFileExW(logPath, oldLogPath, MOVEFILE_REPLACE_EXISTING);
   }
   FILE* f = nullptr;
   if (_wfopen_s(&f, logPath, L"a, ccs=UTF-8") != 0) {
@@ -515,6 +559,7 @@ void LogFlyoutPlacementToFileTai(PCWSTR stage,
                                  float lastStartButtonXCalculated,
                                  float lastRootWidth,
                                  float lastTargetWidth) {
+  std::lock_guard<std::mutex> lock(g_popupLogMutexTai);
   FILE* f = OpenPopupLogFileTai();
   if (!f) {
     return;
@@ -552,6 +597,7 @@ void LogInputSwitchPlacementToFileTai(PCWSTR monitorName,
                                       int y,
                                       int cx,
                                       int cy) {
+  std::lock_guard<std::mutex> lock(g_popupLogMutexTai);
   FILE* f = OpenPopupLogFileTai();
   if (!f) {
     return;
@@ -580,6 +626,7 @@ void LogNotificationCenterPlacementToFileTai(PCWSTR monitorName,
                                              int trayRightDip,
                                              RECT const& viewRect,
                                              int placedX) {
+  std::lock_guard<std::mutex> lock(g_popupLogMutexTai);
   FILE* f = OpenPopupLogFileTai();
   if (!f) {
     return;
@@ -618,6 +665,7 @@ void LogContextMenuPlacementToFileTai(PCWSTR menu,
                                       float windowsY,
                                       float placedX,
                                       float placedY) {
+  std::lock_guard<std::mutex> lock(g_popupLogMutexTai);
   FILE* f = OpenPopupLogFileTai();
   if (!f) {
     return;
@@ -640,6 +688,7 @@ void LogContextMenuPlacementToFileTai(PCWSTR menu,
 // Fork addition: things the mod did to a taskbar window as a whole rather than
 // to a flyout: event names what happened, detail the specifics.
 void LogTaskbarEventToFileTai(PCWSTR event, PCWSTR detail) {
+  std::lock_guard<std::mutex> lock(g_popupLogMutexTai);
   FILE* f = OpenPopupLogFileTai();
   if (!f) {
     return;
