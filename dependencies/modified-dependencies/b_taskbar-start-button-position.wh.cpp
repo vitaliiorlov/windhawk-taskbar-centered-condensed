@@ -887,9 +887,10 @@ __int64 WINAPI CTraySearchControl__WndProc_Hook(void* pThis, void* pHwnd, unsign
 }
 interface ITaskGroup;
 interface ITaskItem;
-// iconVariants was added in Windows 11 build 26100.9549. On older builds the
-// hook is bound to the two-argument function instead; the extra argument then
-// only carries whatever is left in its register, and the original ignores it.
+// iconVariants was added in Windows 11 build 26100.9549, and its element type
+// renamed in 26100.9818; it is only passed through. On older builds the hook is
+// bound to the two-argument function instead; the extra argument then only
+// carries whatever is left in its register, and the original ignores it.
 using CTaskBand__UpdateItemIcon_WithArgs_t = void(WINAPI*)(void* pThis, ITaskGroup* param1, ITaskItem* param2, void* iconVariants);
 CTaskBand__UpdateItemIcon_WithArgs_t CTaskBand__UpdateItemIcon_WithArgs_Original;
 void WINAPI CTaskBand__UpdateItemIcon_WithArgs_Hook(void* pThis, ITaskGroup* param1, ITaskItem* param2, void* iconVariants) {
@@ -959,6 +960,8 @@ bool HookTaskbarDllSymbolsStartButtonPosition() {
     WindhawkUtils::SYMBOL_HOOK taskbarDllHooks[] = {{{LR"(public: virtual void __cdecl CTaskBand::RemoveIcon(struct ITaskItem *))"}, &CTaskBand_RemoveIcon_WithArgs_Original, CTaskBand_RemoveIcon_WithArgs_Hook},
     {
         {
+            LR"(protected: void __cdecl CTaskBand::_UpdateItemIcon(struct ITaskGroup *,struct ITaskItem *,class std::vector<struct TaskbarIcon::IconMetrics,class std::allocator<struct TaskbarIcon::IconMetrics> > const *))",
+            // Before Windows 11 build 26100.9818.
             LR"(protected: void __cdecl CTaskBand::_UpdateItemIcon(struct ITaskGroup *,struct ITaskItem *,class std::vector<struct TaskbarIcon::Variant,class std::allocator<struct TaskbarIcon::Variant> > const *))",
             // Before Windows 11 build 26100.9549.
             LR"(protected: void __cdecl CTaskBand::_UpdateItemIcon(struct ITaskGroup *,struct ITaskItem *))",
@@ -1069,7 +1072,7 @@ bool HookTaskbarDllSymbolsStartButtonPosition() {
             &std__Ref_count_base__Decref_Original,
         },
     };
-     if (!HookSymbols(module, taskbarDllHooks, ARRAYSIZE(taskbarDllHooks))) {
+     if (!HookSymbolsTai(module, taskbarDllHooks, ARRAYSIZE(taskbarDllHooks))) {
         Wh_Log(L"HookSymbols failed");
         if (loadedTaskbarDllForHooking) {
             FreeLibrary(module);
@@ -1142,26 +1145,14 @@ bool HookTaskbarViewDllSymbolsStartButtonPosition(HMODULE module) {
         },
     };
     HookStartButtonContextMenuPositionTai(module);
-    return HookSymbols(module, symbolHooks, ARRAYSIZE(symbolHooks));
+    return HookSymbolsTai(module, symbolHooks, ARRAYSIZE(symbolHooks));
 }
 void HandleLoadedModuleIfTaskbarView(HMODULE module, LPCWSTR lpLibFileName) {
     if (!g_taskbarViewDllLoadedStartButtonPosition && GetTaskbarViewModuleHandle() == module &&
         !g_taskbarViewDllLoadedStartButtonPosition.exchange(true)) {
         Wh_Log(L"Loaded %s", lpLibFileName);
-        if (HookTaskbarViewDllSymbolsStartButtonPosition(module)) {
-            Wh_ApplyHookOperations();
-        }
+        RunModuleHooksTai([module] { return HookTaskbarViewDllSymbolsStartButtonPosition(module); });
     }
-}
-using LoadLibraryExW_t = decltype(&LoadLibraryExW);
-HMODULE WINAPI LoadLibraryExW_Hook_StartButtonPosition(LPCWSTR lpLibFileName,
-                                   HANDLE hFile,
-                                   DWORD dwFlags) {
-    HMODULE module = LoadLibraryExW_Original(lpLibFileName, hFile, dwFlags);
-    if (module) {
-        HandleLoadedModuleIfTaskbarView(module, lpLibFileName);
-    }
-    return module;
 }
 std::wstring GetProcessFileName(DWORD dwProcessId) {
     HANDLE hProcess =
@@ -1768,13 +1759,8 @@ BOOL Wh_ModInitStartButtonPosition() {
         }
     } else {
         Wh_Log(L"Taskbar view module not loaded yet");
-        HMODULE kernelBaseModule = GetModuleHandle(L"kernelbase.dll");
-        auto pKernelBaseLoadLibraryExW =
-            (decltype(&LoadLibraryExW))GetProcAddress(kernelBaseModule,
-                                                      "LoadLibraryExW");
-        WindhawkUtils::SetFunctionHook(pKernelBaseLoadLibraryExW,
-                                       LoadLibraryExW_Hook_StartButtonPosition,
-                                       &LoadLibraryExW_Original);
+        // Fork addition: the taskbar icon size module's LoadLibraryExW_Hook
+        // passes the module on (see HandleLoadedModuleIfTaskbarView).
     }
     HMODULE dwmapiModule =
         LoadLibraryEx(L"dwmapi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);

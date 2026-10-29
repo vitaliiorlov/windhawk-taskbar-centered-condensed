@@ -2,7 +2,7 @@
 // @id              taskbar-dock-like-vo
 // @name            TAI (taskbar as island) for Windows 11 - vo fork
 // @description     Centers and floats the taskbar as an animated dock. Fork changes are listed under Details.
-// @version         1.5.273-vo
+// @version         1.5.274-vo
 // @author          vitaliiorlov (fork of DarkionAvey)
 // @github          https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed
 // @include         explorer.exe
@@ -135,8 +135,11 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    `CTaskBand::_UpdateItemIcon` in `taskbar.dll`, and the mod, whose hook
 >    only knew the old signature, stopped loading
 >    ([upstream issue #34](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issues/34)).
->    The hook accepts both signatures and is optional, so a future change
->    costs one layout trigger rather than the whole mod.
+>    The hook is optional, so a future change costs one layout trigger rather
+>    than the whole mod. The October 2026 preview update (26100.9818 /
+>    26200.9818) was such a change: it renamed the parameter's element type
+>    from `TaskbarIcon::Variant` to `TaskbarIcon::IconMetrics`. The hook
+>    accepts all three signatures.
 >
 > 10. **The Notification Center opens beside the island from the first click.**
 >     Upstream moves the clock and calendar flyout as Explorer reveals it, and
@@ -207,6 +210,39 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >     Windows threads, and a helper started with arguments while another
 >     Explorer owns the taskbar skips the mod altogether.
 >
+> 15. **Explorer no longer hangs on its first start after a Windows update.**
+>     When an update replaces the taskbar's DLLs, Windhawk has to download
+>     their symbols for this mod from Microsoft before it can hook them, since
+>     Windhawk's online symbol cache only covers mods from its catalog; the
+>     October 2026 preview update needed about 185 MB. The DLLs Explorer loads
+>     after the mod, `Taskbar.View.dll`, `SystemTray.dll` and
+>     `SearchUx.UI.dll`, were hooked on the thread loading them, mostly the
+>     taskbar's, so Explorer hung until the downloads were done. Restarting it
+>     started them over, so it could hang on every start. The fork hooks those
+>     DLLs on a worker thread and lets the loading thread wait for it for at
+>     most a second. With the symbols downloaded nothing changes; until then
+>     Explorer runs with Windows' own taskbar sizes, and the taskbar is
+>     restyled as soon as the hooks are in.
+>
+> 16. **Explorer no longer re-reads symbol files on every start.**
+>     Windhawk caches the symbols a mod looks up, one entry per DLL, but a
+>     lookup that misses replaces the entry with its own symbols. The mod
+>     looks up symbols in `taskbar.dll`, `Taskbar.View.dll`, `SystemTray.dll`
+>     and `twinui.pcshell.dll` from two or three places each, so the lookups
+>     kept replacing each other's entries, and every Explorer start parsed
+>     those symbol files again, the largest 50 MB. Each lookup now includes
+>     the symbols of the earlier lookups on its DLL, so the cache holds them
+>     all.
+>
+> 17. **The Start button's hooks are set when Explorer starts with the mod on.**
+>     Both bundled mods hooked `LoadLibraryExW` to catch `Taskbar.View.dll`
+>     loading, but Windhawk lets a mod hook a function only once and refused
+>     the second hook. So whenever Explorer started with the mod already
+>     enabled, as at every sign-in, the Start button code's `Taskbar.View.dll`
+>     hooks were not set, among them the placement of the Start button's
+>     right-click menu (see 5); they worked only after the mod was turned on
+>     in a running Explorer. The two now share one hook.
+>
 > Everything else — the island auto-scaling, the WindhawkBlur engine, the
 > Y-above-taskbar clamp and Notification-Center detection — is upstream's
 > code, used as-is. Earlier versions of this fork carried their own
@@ -225,7 +261,9 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 > upstream sources change. That is deliberate: `dependencies/cpp_patcher.py`
 > raises rather than silently emitting a broken mod. Fork changes belong in
 > `mod-parts/`, `dependencies/patches/`, or the processors — never in
-> `dependencies/modified-dependencies/`, which is regenerated output.
+> `dependencies/modified-dependencies/`, which is regenerated output. For now
+> `taskbar-start-button-position` is pinned to v1.3.2, because v1.3.3
+> reworked code the patches rely on.
 ---
 ## 🚀 How to Install (Development Build)
 ⚠️ **Note:** Please disable any mods that affect taskbar height or taskbar icons—this mod already includes those
@@ -245,6 +283,12 @@ If the mod doesn't start after an update (for example, when a Windows update
 broke the previous version), turn it off and on again in Windhawk; if that
 doesn't help at once, wait a minute and repeat. Restarting Explorer won't
 help: Windhawk doesn't retry a mod that failed to load there for up to 4 hours.
+The first time Explorer starts after a Windows update, Windhawk downloads
+this mod's symbols for the updated Windows files from Microsoft. After a
+large update that can take a few minutes (one in October 2026 needed about
+185 MB). Until it finishes, Explorer can take a little longer to appear and
+the taskbar keeps Windows' own sizes; it is restyled once the download is
+done. Restarting Explorer meanwhile only starts the download over.
 ---
 ## 🛠 Source Code
 The actual mod code is split into files under [
@@ -1282,6 +1326,174 @@ bool HookStartButtonContextMenuPositionTai(HMODULE taskbarViewModule);
 // ApplySettingsFromTaskbarThread.
 void RepairSecondaryTaskbarIslandTai(HWND taskbarWindow,
                                      std::wstring const& monitorName);
+// Fork addition: defined in the start button position dependency, called from
+// the taskbar icon size dependency's LoadLibraryExW_Hook. Both dependencies
+// hooked LoadLibraryExW to catch Taskbar.View.dll loading, but a mod can hook
+// a function only once, so the second hook was refused and the start button
+// position's Taskbar.View.dll hooks were left out whenever Explorer started
+// with the mod enabled. The first hook now passes the module on.
+void HandleLoadedModuleIfTaskbarView(HMODULE module, LPCWSTR lpLibFileName);
+// Fork addition: Windhawk caches the symbols a HookSymbols call finds, in one
+// entry per module, and a call that misses rewrites the entry with its own
+// symbols only. This mod hooks taskbar.dll, Taskbar.View.dll, SystemTray.dll
+// and twinui.pcshell.dll from two or three places each, so the calls kept
+// replacing each other's entries, and every Explorer start parsed those
+// modules' symbol files again, partly on the taskbar thread. So each call also
+// looks up the symbols that the earlier calls on its module asked for: the
+// entry it writes then holds all of them, and from the next Explorer start on,
+// each call finds its symbols there and leaves the entry as it is.
+#ifndef WH_EDITING
+static std::mutex g_symbolHooksByModuleMutexTai;
+static std::unordered_map<HMODULE, std::vector<std::vector<std::wstring>>>
+    g_symbolHooksByModuleTai;
+#endif
+bool HookSymbolsTai(HMODULE module,
+                    const WindhawkUtils::SYMBOL_HOOK* symbolHooks,
+                    size_t symbolHooksCount) {
+#ifdef WH_EDITING
+  // The editor's view of the Windhawk API has no WH_SYMBOL_HOOK.
+  return WindhawkUtils::HookSymbols(module, symbolHooks, symbolHooksCount);
+#else
+  // SYMBOL_HOOK keeps its fields private; WindhawkUtils::HookSymbols hands it
+  // to Windhawk as the WH_SYMBOL_HOOK it mirrors.
+  static_assert(sizeof(WindhawkUtils::SYMBOL_HOOK) == sizeof(WH_SYMBOL_HOOK));
+  using SymbolName = std::remove_cvref_t<decltype(*WH_SYMBOL_HOOK{}.symbols)>;
+  const auto* hooks = reinterpret_cast<const WH_SYMBOL_HOOK*>(symbolHooks);
+  auto nameOf = [](const SymbolName& name) {
+    return std::wstring_view(name.string, name.length);
+  };
+  std::vector<std::vector<std::wstring>> earlierHooks;
+  {
+    std::lock_guard<std::mutex> lock(g_symbolHooksByModuleMutexTai);
+    auto& moduleHooks = g_symbolHooksByModuleTai[module];
+    earlierHooks = moduleHooks;
+    for (size_t i = 0; i < symbolHooksCount; i++) {
+      std::vector<std::wstring> names;
+      for (size_t j = 0; j < hooks[i].symbolsCount; j++) {
+        names.emplace_back(nameOf(hooks[i].symbols[j]));
+      }
+      if (std::find(moduleHooks.begin(), moduleHooks.end(), names) ==
+          moduleHooks.end()) {
+        moduleHooks.push_back(std::move(names));
+      }
+    }
+  }
+  // A name this call asks for itself is left out of the look-ups, so that
+  // Windhawk matches it to this call's hook.
+  auto requested = [&](std::wstring_view name) {
+    for (size_t i = 0; i < symbolHooksCount; i++) {
+      for (size_t j = 0; j < hooks[i].symbolsCount; j++) {
+        if (nameOf(hooks[i].symbols[j]) == name) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+  std::vector<std::vector<SymbolName>> lookupNames;
+  for (const auto& names : earlierHooks) {
+    std::vector<SymbolName> kept;
+    for (const auto& name : names) {
+      if (!requested(name)) {
+        kept.push_back({name.c_str(), name.size()});
+      }
+    }
+    if (!kept.empty()) {
+      lookupNames.push_back(std::move(kept));
+    }
+  }
+  std::vector<void*> lookupAddresses(lookupNames.size());
+  std::vector<WH_SYMBOL_HOOK> allHooks(hooks, hooks + symbolHooksCount);
+  for (size_t i = 0; i < lookupNames.size(); i++) {
+    allHooks.push_back({lookupNames[i].data(), lookupNames[i].size(),
+                        &lookupAddresses[i], nullptr, true});
+  }
+  return WindhawkUtils::HookSymbols(
+      module,
+      reinterpret_cast<const WindhawkUtils::SYMBOL_HOOK*>(allHooks.data()),
+      allHooks.size());
+#endif
+}
+// Fork addition: hooking a module that loads after the mod normally takes
+// milliseconds, since Windhawk finds its symbols in the cache. After a Windows
+// update replaces the module, Windhawk first downloads its symbols from
+// Microsoft, tens of MB for each of these, which took minutes after a large
+// update. The hooks were set on the thread loading the module, mostly the
+// taskbar's, so Explorer hung until the downloads finished, and restarting it
+// started them over. So the hooks are set on a worker, and the loading thread
+// waits for it only briefly: with the symbols cached, the module still runs
+// hooked from the start; otherwise Explorer goes on without the hooks, and once
+// the worker has set them, the taskbar is restyled as when the mod is enabled
+// in a running Explorer. hookModule returns whether it found hooks to apply.
+enum class ModuleHookStateTai { Running, Done, GivenUp };
+struct ModuleHookWorkTai {
+  std::function<bool()> hookModule;
+  std::atomic<ModuleHookStateTai> state{ModuleHookStateTai::Running};
+};
+static std::mutex g_moduleHookWorkersMutexTai;
+static std::vector<HANDLE> g_moduleHookWorkersTai;
+static DWORD WINAPI ModuleHookWorkerTai(LPVOID parameter) {
+  auto* work = static_cast<ModuleHookWorkTai*>(parameter);
+  const bool hooked = work->hookModule();
+  if (hooked) {
+    Wh_ApplyHookOperations();
+  }
+  auto running = ModuleHookStateTai::Running;
+  if (!work->state.compare_exchange_strong(running, ModuleHookStateTai::Done)) {
+    // The loading thread has gone on, and the module ran without the hooks.
+    if (hooked && !g_unloading) {
+      Wh_Log(L"Module hooked once its symbols loaded; restyling the taskbar");
+      ArmInitialExplorerStyleApplyDelay();
+      ScheduleInitialExplorerStyleApply();
+    }
+    delete work;
+  }
+  return 0;
+}
+void RunModuleHooksTai(std::function<bool()> hookModule) {
+  // Building a taskbar can wait here four times in a row (Taskbar.View.dll is
+  // hooked by two dependencies), and Windows reports a window as not
+  // responding after 5 s.
+  constexpr DWORD kLoadingThreadWaitMs = 1000;
+  auto* work = new ModuleHookWorkTai{std::move(hookModule)};
+  HANDLE worker =
+      CreateThread(nullptr, 0, ModuleHookWorkerTai, work, 0, nullptr);
+  if (!worker) {
+    Wh_Log(L"Failed to create a module hook worker: %lu", GetLastError());
+    if (work->hookModule()) {
+      Wh_ApplyHookOperations();
+    }
+    delete work;
+    return;
+  }
+  if (WaitForSingleObject(worker, kLoadingThreadWaitMs) == WAIT_TIMEOUT) {
+    auto running = ModuleHookStateTai::Running;
+    if (work->state.compare_exchange_strong(running,
+                                            ModuleHookStateTai::GivenUp)) {
+      Wh_Log(L"Module symbols are still loading; hooking it in the background");
+      std::lock_guard<std::mutex> lock(g_moduleHookWorkersMutexTai);
+      g_moduleHookWorkersTai.push_back(worker);
+      return;
+    }
+    // The worker has just finished, before the module ran.
+    WaitForSingleObject(worker, INFINITE);
+  }
+  CloseHandle(worker);
+  delete work;
+}
+// Wh_ModBeforeUninit and Wh_ModUninit: a worker still loading symbols would
+// set its hooks during the unload, and it runs code from this DLL.
+void JoinModuleHookWorkersTai() {
+  std::vector<HANDLE> workers;
+  {
+    std::lock_guard<std::mutex> lock(g_moduleHookWorkersMutexTai);
+    workers.swap(g_moduleHookWorkersTai);
+  }
+  for (HANDLE worker : workers) {
+    WaitForSingleObject(worker, INFINITE);
+    CloseHandle(worker);
+  }
+}
 std::wstring GetMonitorName(HMONITOR monitor) {
     MONITORINFOEX monitorInfo = {};
     monitorInfo.cbSize = sizeof(MONITORINFOEX);
@@ -3290,7 +3502,7 @@ bool HookSystemTraySymbols(HMODULE module) {
             true,  // Missing in older Windows 11 versions.
         },
     };
-    if (!HookSymbols(module, symbolHooks, ARRAYSIZE(symbolHooks))) {
+    if (!HookSymbolsTai(module, symbolHooks, ARRAYSIZE(symbolHooks))) {
         Wh_Log(L"HookSymbols failed");
         return false;
     }
@@ -3568,7 +3780,7 @@ bool HookTaskbarViewDllSymbols(HMODULE module,
             allHooks[index++] = std::move(hook);
         }
     }
-    if (!HookSymbols(module, allHooks, index)) {
+    if (!HookSymbolsTai(module, allHooks, index)) {
         Wh_Log(L"HookSymbols failed");
         return false;
     }
@@ -3640,7 +3852,7 @@ bool HookSearchUxUiDllSymbols(HMODULE module) {
             true,  // Missing in older Windows 11 versions.
         },
     };
-    if (!HookSymbols(module, symbolHooks, ARRAYSIZE(symbolHooks))) {
+    if (!HookSymbolsTai(module, symbolHooks, ARRAYSIZE(symbolHooks))) {
         Wh_Log(L"HookSymbols failed");
         return false;
     }
@@ -3711,7 +3923,7 @@ bool HookTaskbarDllSymbolsTBIconSize() {
             TrayUI__HandleSettingChange_Hook,
         },
     };
-if (!HookSymbols(module, taskbarDllHooks, ARRAYSIZE(taskbarDllHooks))) {
+if (!HookSymbolsTai(module, taskbarDllHooks, ARRAYSIZE(taskbarDllHooks))) {
         Wh_Log(L"HookSymbols failed");
         if (loadedTaskbarDllForHooking) {
             FreeLibrary(module);
@@ -3791,9 +4003,7 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR lpLibFileName,
         module != GetTaskbarViewModuleHandle() &&
         !g_systemTrayModuleHooked.exchange(true)) {
         Wh_Log(L"Loaded %s", lpLibFileName);
-        if (HookSystemTraySymbols(module)) {
-            Wh_ApplyHookOperations();
-        }
+        RunModuleHooksTai([module] { return HookSystemTraySymbols(module); });
     }
     if (!g_taskbarViewDllLoadedTBIconSize && GetTaskbarViewModuleHandle() == module &&
         !g_taskbarViewDllLoadedTBIconSize.exchange(true)) {
@@ -3805,17 +4015,16 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR lpLibFileName,
             !g_systemTrayModuleHooked &&
             GetSystemTrayModuleHandle() == module &&
             !g_systemTrayModuleHooked.exchange(true);
-        if (HookTaskbarViewDllSymbols(module, hookSystemTraySymbolsInline)) {
-            Wh_ApplyHookOperations();
-        }
+        RunModuleHooksTai([module, hookSystemTraySymbolsInline] {
+            return HookTaskbarViewDllSymbols(module, hookSystemTraySymbolsInline);
+        });
     }
     if (!g_searchUxUiDllLoaded && GetSearchUxUiModuleHandle() == module &&
         !g_searchUxUiDllLoaded.exchange(true)) {
         Wh_Log(L"Loaded %s", lpLibFileName);
-        if (HookSearchUxUiDllSymbols(module)) {
-            Wh_ApplyHookOperations();
-        }
+        RunModuleHooksTai([module] { return HookSearchUxUiDllSymbols(module); });
     }
+    HandleLoadedModuleIfTaskbarView(module, lpLibFileName);
     return module;
 }
 BOOL Wh_ModInitTBIconSize() {
@@ -4833,9 +5042,10 @@ __int64 WINAPI CTraySearchControl__WndProc_Hook(void* pThis, void* pHwnd, unsign
 }
 interface ITaskGroup;
 interface ITaskItem;
-// iconVariants was added in Windows 11 build 26100.9549. On older builds the
-// hook is bound to the two-argument function instead; the extra argument then
-// only carries whatever is left in its register, and the original ignores it.
+// iconVariants was added in Windows 11 build 26100.9549, and its element type
+// renamed in 26100.9818; it is only passed through. On older builds the hook is
+// bound to the two-argument function instead; the extra argument then only
+// carries whatever is left in its register, and the original ignores it.
 using CTaskBand__UpdateItemIcon_WithArgs_t = void(WINAPI*)(void* pThis, ITaskGroup* param1, ITaskItem* param2, void* iconVariants);
 CTaskBand__UpdateItemIcon_WithArgs_t CTaskBand__UpdateItemIcon_WithArgs_Original;
 void WINAPI CTaskBand__UpdateItemIcon_WithArgs_Hook(void* pThis, ITaskGroup* param1, ITaskItem* param2, void* iconVariants) {
@@ -4905,6 +5115,8 @@ bool HookTaskbarDllSymbolsStartButtonPosition() {
     WindhawkUtils::SYMBOL_HOOK taskbarDllHooks[] = {{{LR"(public: virtual void __cdecl CTaskBand::RemoveIcon(struct ITaskItem *))"}, &CTaskBand_RemoveIcon_WithArgs_Original, CTaskBand_RemoveIcon_WithArgs_Hook},
     {
         {
+            LR"(protected: void __cdecl CTaskBand::_UpdateItemIcon(struct ITaskGroup *,struct ITaskItem *,class std::vector<struct TaskbarIcon::IconMetrics,class std::allocator<struct TaskbarIcon::IconMetrics> > const *))",
+            // Before Windows 11 build 26100.9818.
             LR"(protected: void __cdecl CTaskBand::_UpdateItemIcon(struct ITaskGroup *,struct ITaskItem *,class std::vector<struct TaskbarIcon::Variant,class std::allocator<struct TaskbarIcon::Variant> > const *))",
             // Before Windows 11 build 26100.9549.
             LR"(protected: void __cdecl CTaskBand::_UpdateItemIcon(struct ITaskGroup *,struct ITaskItem *))",
@@ -5015,7 +5227,7 @@ bool HookTaskbarDllSymbolsStartButtonPosition() {
             &std__Ref_count_base__Decref_Original,
         },
     };
-     if (!HookSymbols(module, taskbarDllHooks, ARRAYSIZE(taskbarDllHooks))) {
+     if (!HookSymbolsTai(module, taskbarDllHooks, ARRAYSIZE(taskbarDllHooks))) {
         Wh_Log(L"HookSymbols failed");
         if (loadedTaskbarDllForHooking) {
             FreeLibrary(module);
@@ -5088,26 +5300,14 @@ bool HookTaskbarViewDllSymbolsStartButtonPosition(HMODULE module) {
         },
     };
     HookStartButtonContextMenuPositionTai(module);
-    return HookSymbols(module, symbolHooks, ARRAYSIZE(symbolHooks));
+    return HookSymbolsTai(module, symbolHooks, ARRAYSIZE(symbolHooks));
 }
 void HandleLoadedModuleIfTaskbarView(HMODULE module, LPCWSTR lpLibFileName) {
     if (!g_taskbarViewDllLoadedStartButtonPosition && GetTaskbarViewModuleHandle() == module &&
         !g_taskbarViewDllLoadedStartButtonPosition.exchange(true)) {
         Wh_Log(L"Loaded %s", lpLibFileName);
-        if (HookTaskbarViewDllSymbolsStartButtonPosition(module)) {
-            Wh_ApplyHookOperations();
-        }
+        RunModuleHooksTai([module] { return HookTaskbarViewDllSymbolsStartButtonPosition(module); });
     }
-}
-using LoadLibraryExW_t = decltype(&LoadLibraryExW);
-HMODULE WINAPI LoadLibraryExW_Hook_StartButtonPosition(LPCWSTR lpLibFileName,
-                                   HANDLE hFile,
-                                   DWORD dwFlags) {
-    HMODULE module = LoadLibraryExW_Original(lpLibFileName, hFile, dwFlags);
-    if (module) {
-        HandleLoadedModuleIfTaskbarView(module, lpLibFileName);
-    }
-    return module;
 }
 std::wstring GetProcessFileName(DWORD dwProcessId) {
     HANDLE hProcess =
@@ -5714,13 +5914,8 @@ BOOL Wh_ModInitStartButtonPosition() {
         }
     } else {
         Wh_Log(L"Taskbar view module not loaded yet");
-        HMODULE kernelBaseModule = GetModuleHandle(L"kernelbase.dll");
-        auto pKernelBaseLoadLibraryExW =
-            (decltype(&LoadLibraryExW))GetProcAddress(kernelBaseModule,
-                                                      "LoadLibraryExW");
-        WindhawkUtils::SetFunctionHook(pKernelBaseLoadLibraryExW,
-                                       LoadLibraryExW_Hook_StartButtonPosition,
-                                       &LoadLibraryExW_Original);
+        // Fork addition: the taskbar icon size module's LoadLibraryExW_Hook
+        // passes the module on (see HandleLoadedModuleIfTaskbarView).
     }
     HMODULE dwmapiModule =
         LoadLibraryEx(L"dwmapi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -10357,7 +10552,7 @@ static bool HookStartMenuMonitorTai(HMODULE twinuiPcshellModule) {
        &ImmersiveMonitorHelper_AdjustMonitorConnectedIfNeeded_Original,
        ImmersiveMonitorHelper_AdjustMonitorConnectedIfNeeded_Hook},
   };
-  const bool hooked = WindhawkUtils::HookSymbols(
+  const bool hooked = HookSymbolsTai(
       twinuiPcshellModule, twinuiPcshellHooks, ARRAYSIZE(twinuiPcshellHooks));
   Wh_Log(L"[StartMenu] monitor hook %s", hooked ? L"set" : L"unavailable");
   return hooked;
@@ -10368,7 +10563,7 @@ static bool HookNotificationCenterViewPositionTai(HMODULE twinuiPcshellModule) {
        &CActionCenterExperienceManager_GetViewPosition_Original,
        CActionCenterExperienceManager_GetViewPosition_Hook},
   };
-  const bool hooked = WindhawkUtils::HookSymbols(
+  const bool hooked = HookSymbolsTai(
       twinuiPcshellModule, twinuiPcshellHooks, ARRAYSIZE(twinuiPcshellHooks));
   Wh_Log(L"[NotificationCenter] GetViewPosition hook %s",
          hooked ? L"set" : L"unavailable");
@@ -10749,7 +10944,7 @@ bool HookTrayContextMenuPositionTai(HMODULE systemTrayModule) {
        &ContextMenuPositionHelper_PositionContextMenuPopup_Original,
        ContextMenuPositionHelper_PositionContextMenuPopup_Hook},
   };
-  const bool hooked = WindhawkUtils::HookSymbols(
+  const bool hooked = HookSymbolsTai(
       systemTrayModule, systemTrayHooks, ARRAYSIZE(systemTrayHooks));
   Wh_Log(L"[TrayContextMenu] ContextMenuPositionHelper hooks %s",
          hooked ? L"set" : L"unavailable");
@@ -10852,7 +11047,7 @@ bool HookStartButtonContextMenuPositionTai(HMODULE taskbarViewModule) {
        &GetLeadingStartFlyoutPosition_Original,
        GetLeadingStartFlyoutPosition_Hook},
   };
-  const bool hooked = WindhawkUtils::HookSymbols(
+  const bool hooked = HookSymbolsTai(
       taskbarViewModule, taskbarViewHooks, ARRAYSIZE(taskbarViewHooks));
   Wh_Log(L"[StartButtonContextMenu] GetLeadingStartFlyoutPosition hook %s",
          hooked ? L"set" : L"unavailable");
@@ -12175,7 +12370,7 @@ BOOL Wh_ModInit() {
     HMODULE moduleStartDocked = GetModuleHandle(L"StartDocked.dll");
     if (moduleStartDocked) {
       WindhawkUtils::SYMBOL_HOOK StartDockedDll_hook[] = {{{LR"(private: void __cdecl StartDocked::StartSizingFrame::UpdateWindowRegion(class Windows::Foundation::Size))"}, &StartDocked__StartSizingFrame_UpdateWindowRegion_WithArgs_Original, StartDocked__StartSizingFrame_UpdateWindowRegion_WithArgs_Hook}};
-      return WindhawkUtils::HookSymbols(moduleStartDocked, StartDockedDll_hook, ARRAYSIZE(StartDockedDll_hook));
+      return HookSymbolsTai(moduleStartDocked, StartDockedDll_hook, ARRAYSIZE(StartDockedDll_hook));
     }
     return true;
   }
@@ -12227,6 +12422,8 @@ void Wh_ModBeforeUninit() {
   }
   // Fork addition: see CActionCenterExperienceManager_GetViewPosition_Hook.
   StopNotificationCenterHookWaitTai();
+  // Fork addition: see RunModuleHooksTai.
+  JoinModuleHookWorkersTai();
   g_unloading = true;
   CleanupDebounce();
   UninitMinimizeAnimationCorrectionTai();
@@ -12242,6 +12439,9 @@ void Wh_ModUninit() {
   if (g_PartialMode) {
     return;
   }
+  // Fork addition: see RunModuleHooksTai. A module can still load between
+  // Wh_ModBeforeUninit and the removal of the LoadLibraryExW hook.
+  JoinModuleHookWorkersTai();
   // Fork addition: belt-and-braces. Do not rely on a final g_unloading
   // ApplyStyle pass reaching the region update -- it has several earlier
   // return paths.
