@@ -241,6 +241,14 @@ broke the previous version), turn it off and on again in Windhawk; if that
 doesn't help at once, wait a minute and repeat. Restarting Explorer won't
 help: Windhawk doesn't retry a mod that failed to load there for up to 4 hours.
 
+The first time Explorer starts after a Windows update, Windhawk downloads
+this mod's symbols for the updated Windows files from Microsoft. After a
+large update that can take a few minutes (one in October 2026 needed about
+185 MB), and until it finishes, the taskbar can freeze. Let it finish:
+restarting Explorer starts the download over. If it doesn't recover, exit
+Windhawk from its tray icon, wait for the taskbar to come back, then start
+Windhawk again; the download then runs without holding up Explorer.
+
 ---
 
 ## 🛠 Source Code
