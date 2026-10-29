@@ -15,6 +15,8 @@ class TaskbarIconSizeMod(URLProcessor):
     def format_content(self, content: str) -> str:
         patch = CppPatcher(content, source_name=self.name)
 
+        self._hook_loaded_modules_off_the_loading_thread(patch)
+
         return (
             patch.replace_literal('Wh_GetIntSetting(L"IconSize")', 'Wh_GetIntSetting(L"TaskbarIconSize")')
             .insert_after_regex(
@@ -244,7 +246,58 @@ class TaskbarIconSizeMod(URLProcessor):
                 "    }\n",
                 in_function="void Wh_ModSettingsChangedTBIconSize()",
             )
+            # Fork addition: see HookSymbolsTai in top-level-definitions.cpp,
+            # which is spliced in above and calls WindhawkUtils::HookSymbols.
+            .replace_regex(
+                r"(?<![\w:])HookSymbols\(module,",
+                "HookSymbolsTai(module,",
+                label="share symbol cache entries between HookSymbols calls",
+            )
             .text()
+        )
+
+    @staticmethod
+    def _hook_loaded_modules_off_the_loading_thread(patch: CppPatcher) -> None:
+        # Fork addition: see RunModuleHooksTai and HandleLoadedModuleIfTaskbarView
+        # in top-level-definitions.cpp.
+        hook = "HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)"
+        (
+            patch.replace_literal(
+                """        if (HookSystemTraySymbols(module)) {
+            Wh_ApplyHookOperations();
+        }""",
+                "        RunModuleHooksTai([module] { return HookSystemTraySymbols(module); });",
+                count=1,
+                in_function=hook,
+                label="hook SystemTray.dll on a worker",
+            )
+            .replace_literal(
+                """        if (HookTaskbarViewDllSymbols(module, hookSystemTraySymbolsInline)) {
+            Wh_ApplyHookOperations();
+        }""",
+                """        RunModuleHooksTai([module, hookSystemTraySymbolsInline] {
+            return HookTaskbarViewDllSymbols(module, hookSystemTraySymbolsInline);
+        });""",
+                count=1,
+                in_function=hook,
+                label="hook Taskbar.View.dll on a worker",
+            )
+            .replace_literal(
+                """        if (HookSearchUxUiDllSymbols(module)) {
+            Wh_ApplyHookOperations();
+        }""",
+                "        RunModuleHooksTai([module] { return HookSearchUxUiDllSymbols(module); });",
+                count=1,
+                in_function=hook,
+                label="hook SearchUx.UI.dll on a worker",
+            )
+            .replace_regex(
+                r"(\n[ \t]*)return module;(\s*)\Z",
+                r"\1HandleLoadedModuleIfTaskbarView(module, lpLibFileName);\1return module;\2",
+                count=1,
+                in_function=hook,
+                label="pass the module on to the start button position module",
+            )
         )
 
     def _build_dpi_prefix(self) -> str:

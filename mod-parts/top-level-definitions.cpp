@@ -708,3 +708,179 @@ bool HookStartButtonContextMenuPositionTai(HMODULE taskbarViewModule);
 // ApplySettingsFromTaskbarThread.
 void RepairSecondaryTaskbarIslandTai(HWND taskbarWindow,
                                      std::wstring const& monitorName);
+// Fork addition: defined in the start button position dependency, called from
+// the taskbar icon size dependency's LoadLibraryExW_Hook. Both dependencies
+// hooked LoadLibraryExW to catch Taskbar.View.dll loading, but a mod can hook
+// a function only once, so the second hook was refused and the start button
+// position's Taskbar.View.dll hooks were left out whenever Explorer started
+// with the mod enabled. The first hook now passes the module on.
+void HandleLoadedModuleIfTaskbarView(HMODULE module, LPCWSTR lpLibFileName);
+
+// Fork addition: Windhawk caches the symbols a HookSymbols call finds, in one
+// entry per module, and a call that misses rewrites the entry with its own
+// symbols only. This mod hooks taskbar.dll, Taskbar.View.dll, SystemTray.dll
+// and twinui.pcshell.dll from two or three places each, so the calls kept
+// replacing each other's entries, and every Explorer start parsed those
+// modules' symbol files again, partly on the taskbar thread. So each call also
+// looks up the symbols that the earlier calls on its module asked for: the
+// entry it writes then holds all of them, and from the next Explorer start on,
+// each call finds its symbols there and leaves the entry as it is.
+#ifndef WH_EDITING
+static std::mutex g_symbolHooksByModuleMutexTai;
+static std::unordered_map<HMODULE, std::vector<std::vector<std::wstring>>>
+    g_symbolHooksByModuleTai;
+#endif
+
+bool HookSymbolsTai(HMODULE module,
+                    const WindhawkUtils::SYMBOL_HOOK* symbolHooks,
+                    size_t symbolHooksCount) {
+#ifdef WH_EDITING
+  // The editor's view of the Windhawk API has no WH_SYMBOL_HOOK.
+  return WindhawkUtils::HookSymbols(module, symbolHooks, symbolHooksCount);
+#else
+  // SYMBOL_HOOK keeps its fields private; WindhawkUtils::HookSymbols hands it
+  // to Windhawk as the WH_SYMBOL_HOOK it mirrors.
+  static_assert(sizeof(WindhawkUtils::SYMBOL_HOOK) == sizeof(WH_SYMBOL_HOOK));
+  using SymbolName = std::remove_cvref_t<decltype(*WH_SYMBOL_HOOK{}.symbols)>;
+  const auto* hooks = reinterpret_cast<const WH_SYMBOL_HOOK*>(symbolHooks);
+  auto nameOf = [](const SymbolName& name) {
+    return std::wstring_view(name.string, name.length);
+  };
+
+  std::vector<std::vector<std::wstring>> earlierHooks;
+  {
+    std::lock_guard<std::mutex> lock(g_symbolHooksByModuleMutexTai);
+    auto& moduleHooks = g_symbolHooksByModuleTai[module];
+    earlierHooks = moduleHooks;
+    for (size_t i = 0; i < symbolHooksCount; i++) {
+      std::vector<std::wstring> names;
+      for (size_t j = 0; j < hooks[i].symbolsCount; j++) {
+        names.emplace_back(nameOf(hooks[i].symbols[j]));
+      }
+      if (std::find(moduleHooks.begin(), moduleHooks.end(), names) ==
+          moduleHooks.end()) {
+        moduleHooks.push_back(std::move(names));
+      }
+    }
+  }
+
+  // A name this call asks for itself is left out of the look-ups, so that
+  // Windhawk matches it to this call's hook.
+  auto requested = [&](std::wstring_view name) {
+    for (size_t i = 0; i < symbolHooksCount; i++) {
+      for (size_t j = 0; j < hooks[i].symbolsCount; j++) {
+        if (nameOf(hooks[i].symbols[j]) == name) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+  std::vector<std::vector<SymbolName>> lookupNames;
+  for (const auto& names : earlierHooks) {
+    std::vector<SymbolName> kept;
+    for (const auto& name : names) {
+      if (!requested(name)) {
+        kept.push_back({name.c_str(), name.size()});
+      }
+    }
+    if (!kept.empty()) {
+      lookupNames.push_back(std::move(kept));
+    }
+  }
+  std::vector<void*> lookupAddresses(lookupNames.size());
+  std::vector<WH_SYMBOL_HOOK> allHooks(hooks, hooks + symbolHooksCount);
+  for (size_t i = 0; i < lookupNames.size(); i++) {
+    allHooks.push_back({lookupNames[i].data(), lookupNames[i].size(),
+                        &lookupAddresses[i], nullptr, true});
+  }
+  return WindhawkUtils::HookSymbols(
+      module,
+      reinterpret_cast<const WindhawkUtils::SYMBOL_HOOK*>(allHooks.data()),
+      allHooks.size());
+#endif
+}
+
+// Fork addition: hooking a module that loads after the mod normally takes
+// milliseconds, since Windhawk finds its symbols in the cache. After a Windows
+// update replaces the module, Windhawk first downloads its symbols from
+// Microsoft, tens of MB for each of these, which took minutes after a large
+// update. The hooks were set on the thread loading the module, mostly the
+// taskbar's, so Explorer hung until the downloads finished, and restarting it
+// started them over. So the hooks are set on a worker, and the loading thread
+// waits for it only briefly: with the symbols cached, the module still runs
+// hooked from the start; otherwise Explorer goes on without the hooks, and once
+// the worker has set them, the taskbar is restyled as when the mod is enabled
+// in a running Explorer. hookModule returns whether it found hooks to apply.
+enum class ModuleHookStateTai { Running, Done, GivenUp };
+struct ModuleHookWorkTai {
+  std::function<bool()> hookModule;
+  std::atomic<ModuleHookStateTai> state{ModuleHookStateTai::Running};
+};
+static std::mutex g_moduleHookWorkersMutexTai;
+static std::vector<HANDLE> g_moduleHookWorkersTai;
+
+static DWORD WINAPI ModuleHookWorkerTai(LPVOID parameter) {
+  auto* work = static_cast<ModuleHookWorkTai*>(parameter);
+  const bool hooked = work->hookModule();
+  if (hooked) {
+    Wh_ApplyHookOperations();
+  }
+  auto running = ModuleHookStateTai::Running;
+  if (!work->state.compare_exchange_strong(running, ModuleHookStateTai::Done)) {
+    // The loading thread has gone on, and the module ran without the hooks.
+    if (hooked && !g_unloading) {
+      Wh_Log(L"Module hooked once its symbols loaded; restyling the taskbar");
+      ArmInitialExplorerStyleApplyDelay();
+      ScheduleInitialExplorerStyleApply();
+    }
+    delete work;
+  }
+  return 0;
+}
+
+void RunModuleHooksTai(std::function<bool()> hookModule) {
+  // Building a taskbar can wait here four times in a row (Taskbar.View.dll is
+  // hooked by two dependencies), and Windows reports a window as not
+  // responding after 5 s.
+  constexpr DWORD kLoadingThreadWaitMs = 1000;
+  auto* work = new ModuleHookWorkTai{std::move(hookModule)};
+  HANDLE worker =
+      CreateThread(nullptr, 0, ModuleHookWorkerTai, work, 0, nullptr);
+  if (!worker) {
+    Wh_Log(L"Failed to create a module hook worker: %lu", GetLastError());
+    if (work->hookModule()) {
+      Wh_ApplyHookOperations();
+    }
+    delete work;
+    return;
+  }
+  if (WaitForSingleObject(worker, kLoadingThreadWaitMs) == WAIT_TIMEOUT) {
+    auto running = ModuleHookStateTai::Running;
+    if (work->state.compare_exchange_strong(running,
+                                            ModuleHookStateTai::GivenUp)) {
+      Wh_Log(L"Module symbols are still loading; hooking it in the background");
+      std::lock_guard<std::mutex> lock(g_moduleHookWorkersMutexTai);
+      g_moduleHookWorkersTai.push_back(worker);
+      return;
+    }
+    // The worker has just finished, before the module ran.
+    WaitForSingleObject(worker, INFINITE);
+  }
+  CloseHandle(worker);
+  delete work;
+}
+
+// Wh_ModBeforeUninit and Wh_ModUninit: a worker still loading symbols would
+// set its hooks during the unload, and it runs code from this DLL.
+void JoinModuleHookWorkersTai() {
+  std::vector<HANDLE> workers;
+  {
+    std::lock_guard<std::mutex> lock(g_moduleHookWorkersMutexTai);
+    workers.swap(g_moduleHookWorkersTai);
+  }
+  for (HANDLE worker : workers) {
+    WaitForSingleObject(worker, INFINITE);
+    CloseHandle(worker);
+  }
+}
