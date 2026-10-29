@@ -9,10 +9,7 @@ from .url_processor import URLProcessor
 
 class StartButtonPosition(URLProcessor):
     def __init__(self):
-        # Pinned to v1.3.2. v1.3.3 (vertical taskbar support) reworked code
-        # that the patches below rely on, so it fails them; switch back to
-        # refs/heads/main once they are ported.
-        url = "https://raw.githubusercontent.com/ramensoftware/windhawk-mods/f54228f470bf21b8c0d7d291a80fc4d7d802084c/mods/taskbar-start-button-position.wh.cpp"
+        url = "https://raw.githubusercontent.com/ramensoftware/windhawk-mods/refs/heads/main/mods/taskbar-start-button-position.wh.cpp"
         super().__init__(url, "StartButtonPosition", "b")
 
     def format_content(self, content: str) -> str:
@@ -21,6 +18,7 @@ class StartButtonPosition(URLProcessor):
         self._remove_unused_upstream_code(patch)
         self._rename_and_disable_upstream_hooks(patch)
         self._share_the_module_load_hook(patch)
+        self._leave_out_unused_upstream_hooks(patch)
         self._patch_start_menu_logic(patch)
         self._insert_custom_hooks(patch)
         self._patch_dwm_targeting(patch)
@@ -131,6 +129,30 @@ class StartButtonPosition(URLProcessor):
             label="remove the unused LoadLibraryExW type",
         )
 
+    def _leave_out_unused_upstream_hooks(self, patch: CppPatcher) -> None:
+        # Fork addition. Since v1.3.3, upstream hooks TaskbarFrame::ChildItemBounds
+        # so that the buttons it pins are reported where they were arranged,
+        # and twinui.pcshell.dll so that the search window stays by a search
+        # button pinned to the left. This mod pins no buttons (the arrange hook
+        # and ApplyStyle(XamlRoot) are disabled below) and has no setting for
+        # pinning search, and the twinui.pcshell.dll lookup would run in
+        # Wh_ModInit, holding up Explorer's start while its symbols download
+        # after a Windows update.
+        patch.remove_regex(
+            r'\s*\{\s*\{LR"\([^"]*::ChildItemBounds\(void\)const \)"\},'
+            r"\s*&TaskbarFrame_ChildItemBounds_Original,"
+            r"\s*TaskbarFrame_ChildItemBounds_Hook,\s*true,\s*\},",
+            count=1,
+            in_function="bool HookTaskbarViewDllSymbolsStartButtonPosition(HMODULE module)",
+            label="leave TaskbarFrame::ChildItemBounds unhooked",
+        )
+        patch.remove_regex(
+            r"\s*if \(!HookTwinuiPcshellSymbols\(\)\) \{.*?\}",
+            count=1,
+            in_function="BOOL Wh_ModInitStartButtonPosition()",
+            label="leave twinui.pcshell.dll unhooked in Wh_ModInit",
+        )
+
     def _remove_unused_upstream_code(self, patch: CppPatcher) -> None:
         patch.remove_function("FrameworkElement EnumChildElements(")
         patch.remove_function("FrameworkElement FindChildByName(")
@@ -211,15 +233,19 @@ class StartButtonPosition(URLProcessor):
             label="disable upstream ApplyStyle(XamlRoot)",
         )
 
+        # The replacement handler below takes the monitor; upstream's handlers
+        # take whether the taskbar is vertical (v1.3.3).
         patch.replace_literal(
-            """if (contentClassName == L"StartMenu.StartBlendedFlexFrame") {
-        ApplyStyleRedesignedStartMenu(content);
-    }""",
-            """if (contentClassName == L"StartMenu.StartBlendedFlexFrame") {
-        ApplyStyleClassicStartMenu(content, monitor);
-    }""",
+            "ApplyStyleRedesignedStartMenu(content, verticalTaskbar);",
+            "ApplyStyleClassicStartMenu(content, monitor);",
             count=1,
             label="route redesigned start menu to classic position handler",
+        )
+        patch.replace_literal(
+            "ApplyStyleClassicStartMenu(content, verticalTaskbar);",
+            "ApplyStyleClassicStartMenu(content, monitor);",
+            count=1,
+            label="pass the monitor to the classic position handler",
         )
 
         patch.replace_literal(
@@ -230,14 +256,14 @@ class StartButtonPosition(URLProcessor):
         )
 
         patch.replace_function(
-            "void ApplyStyleClassicStartMenu(FrameworkElement content, HMONITOR monitor)",
+            "void ApplyStyleClassicStartMenu(FrameworkElement content, bool verticalTaskbar)",
             read_patch("startbuttonposition_apply_style_classic_start_menu.cpp"),
             label="replace ApplyStyleClassicStartMenu",
         )
 
         patch.replace_literal(
-            "frameRoot.HorizontalAlignment(HorizontalAlignment::Left);",
-            "frameRoot.HorizontalAlignment(HorizontalAlignment::Center);",
+            "g_horizontalAlignmentOverride.Set(frameRoot, HorizontalAlignment::Left);",
+            "g_horizontalAlignmentOverride.Set(frameRoot, HorizontalAlignment::Center);",
             count=1,
             label="center classic start menu frame root",
         )
@@ -364,8 +390,8 @@ class StartButtonPosition(URLProcessor):
         )
         patch.replace_literal("HWND g_searchMenuWnd;", "HWND g_searchMenuWnd, g_startMenuWnd;", count=1)
         patch.replace_literal(
-            "int g_searchMenuOriginalX;",
-            "int g_searchMenuOriginalX, g_startMenuOriginalWidth;",
+            "int g_searchMenuOriginalPos;",
+            "int g_searchMenuOriginalPos, g_startMenuOriginalWidth;",
             count=1,
         )
         patch.replace_regex(
@@ -382,8 +408,11 @@ class StartButtonPosition(URLProcessor):
             in_function="HRESULT WINAPI DwmSetWindowAttribute_Hook(",
             label="move flyouts without waiting on them",
         )
-        patch.remove_literal("margin.Right = 0;")
-        patch.remove_literal("margin.Right = -width;")
+        # Up to v1.3.2 this also removed the collapse of the pinned buttons
+        # (margin.Right = -width and its undo), which sat in ApplyStyle(XamlRoot)
+        # and so never ran. v1.3.3 moved it to ApplyClusterButtonCollapse,
+        # which only ApplyStyle(XamlRoot) and the arrange hook call, both
+        # disabled in _patch_start_menu_logic.
 
     def _guard_taskbar_xaml_root_lookup(self, patch: CppPatcher) -> None:
         # Fork addition. Upstream reads a taskbar's XAML root through Explorer's
