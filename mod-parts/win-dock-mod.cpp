@@ -4233,7 +4233,7 @@ static bool HookStartMenuMonitorTai(HMODULE twinuiPcshellModule) {
        &ImmersiveMonitorHelper_AdjustMonitorConnectedIfNeeded_Original,
        ImmersiveMonitorHelper_AdjustMonitorConnectedIfNeeded_Hook},
   };
-  const bool hooked = WindhawkUtils::HookSymbols(
+  const bool hooked = HookSymbolsTai(
       twinuiPcshellModule, twinuiPcshellHooks, ARRAYSIZE(twinuiPcshellHooks));
   Wh_Log(L"[StartMenu] monitor hook %s", hooked ? L"set" : L"unavailable");
   return hooked;
@@ -4245,7 +4245,7 @@ static bool HookNotificationCenterViewPositionTai(HMODULE twinuiPcshellModule) {
        &CActionCenterExperienceManager_GetViewPosition_Original,
        CActionCenterExperienceManager_GetViewPosition_Hook},
   };
-  const bool hooked = WindhawkUtils::HookSymbols(
+  const bool hooked = HookSymbolsTai(
       twinuiPcshellModule, twinuiPcshellHooks, ARRAYSIZE(twinuiPcshellHooks));
   Wh_Log(L"[NotificationCenter] GetViewPosition hook %s",
          hooked ? L"set" : L"unavailable");
@@ -4646,7 +4646,7 @@ bool HookTrayContextMenuPositionTai(HMODULE systemTrayModule) {
        &ContextMenuPositionHelper_PositionContextMenuPopup_Original,
        ContextMenuPositionHelper_PositionContextMenuPopup_Hook},
   };
-  const bool hooked = WindhawkUtils::HookSymbols(
+  const bool hooked = HookSymbolsTai(
       systemTrayModule, systemTrayHooks, ARRAYSIZE(systemTrayHooks));
   Wh_Log(L"[TrayContextMenu] ContextMenuPositionHelper hooks %s",
          hooked ? L"set" : L"unavailable");
@@ -4752,7 +4752,7 @@ bool HookStartButtonContextMenuPositionTai(HMODULE taskbarViewModule) {
        &GetLeadingStartFlyoutPosition_Original,
        GetLeadingStartFlyoutPosition_Hook},
   };
-  const bool hooked = WindhawkUtils::HookSymbols(
+  const bool hooked = HookSymbolsTai(
       taskbarViewModule, taskbarViewHooks, ARRAYSIZE(taskbarViewHooks));
   Wh_Log(L"[StartButtonContextMenu] GetLeadingStartFlyoutPosition hook %s",
          hooked ? L"set" : L"unavailable");
@@ -6084,7 +6084,7 @@ BOOL Wh_ModInit() {
     HMODULE moduleStartDocked = GetModuleHandle(L"StartDocked.dll");
     if (moduleStartDocked) {
       WindhawkUtils::SYMBOL_HOOK StartDockedDll_hook[] = {{{LR"(private: void __cdecl StartDocked::StartSizingFrame::UpdateWindowRegion(class Windows::Foundation::Size))"}, &StartDocked__StartSizingFrame_UpdateWindowRegion_WithArgs_Original, StartDocked__StartSizingFrame_UpdateWindowRegion_WithArgs_Hook}};
-      return WindhawkUtils::HookSymbols(moduleStartDocked, StartDockedDll_hook, ARRAYSIZE(StartDockedDll_hook));
+      return HookSymbolsTai(moduleStartDocked, StartDockedDll_hook, ARRAYSIZE(StartDockedDll_hook));
     }
     return true;
   }
@@ -6136,6 +6136,8 @@ void Wh_ModBeforeUninit() {
   }
   // Fork addition: see CActionCenterExperienceManager_GetViewPosition_Hook.
   StopNotificationCenterHookWaitTai();
+  // Fork addition: see RunModuleHooksTai.
+  JoinModuleHookWorkersTai();
   g_unloading = true;
   CleanupDebounce();
   UninitMinimizeAnimationCorrectionTai();
@@ -6151,6 +6153,9 @@ void Wh_ModUninit() {
   if (g_PartialMode) {
     return;
   }
+  // Fork addition: see RunModuleHooksTai. A module can still load between
+  // Wh_ModBeforeUninit and the removal of the LoadLibraryExW hook.
+  JoinModuleHookWorkersTai();
   // Fork addition: belt-and-braces. Do not rely on a final g_unloading
   // ApplyStyle pass reaching the region update -- it has several earlier
   // return paths.

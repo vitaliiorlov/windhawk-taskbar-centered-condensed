@@ -9,7 +9,10 @@ from .url_processor import URLProcessor
 
 class StartButtonPosition(URLProcessor):
     def __init__(self):
-        url = "https://raw.githubusercontent.com/ramensoftware/windhawk-mods/refs/heads/main/mods/taskbar-start-button-position.wh.cpp"
+        # Pinned to v1.3.2. v1.3.3 (vertical taskbar support) reworked code
+        # that the patches below rely on, so it fails them; switch back to
+        # refs/heads/main once they are ported.
+        url = "https://raw.githubusercontent.com/ramensoftware/windhawk-mods/f54228f470bf21b8c0d7d291a80fc4d7d802084c/mods/taskbar-start-button-position.wh.cpp"
         super().__init__(url, "StartButtonPosition", "b")
 
     def format_content(self, content: str) -> str:
@@ -17,6 +20,7 @@ class StartButtonPosition(URLProcessor):
 
         self._remove_unused_upstream_code(patch)
         self._rename_and_disable_upstream_hooks(patch)
+        self._share_the_module_load_hook(patch)
         self._patch_start_menu_logic(patch)
         self._insert_custom_hooks(patch)
         self._patch_dwm_targeting(patch)
@@ -81,7 +85,50 @@ class StartButtonPosition(URLProcessor):
                 "HookStartButtonContextMenuPositionTai(module);\n    ",
                 in_function="bool HookTaskbarViewDllSymbolsStartButtonPosition(HMODULE module)",
             )
+            # Fork addition: see HookSymbolsTai in top-level-definitions.cpp.
+            .replace_regex(
+                r"(?<![\w:])HookSymbols\(module,",
+                "HookSymbolsTai(module,",
+                label="share symbol cache entries between HookSymbols calls",
+            )
             .text()
+        )
+
+    def _share_the_module_load_hook(self, patch: CppPatcher) -> None:
+        # Fork addition: the taskbar icon size module's LoadLibraryExW_Hook
+        # passes Taskbar.View.dll on (see HandleLoadedModuleIfTaskbarView and
+        # RunModuleHooksTai in top-level-definitions.cpp). This module's own
+        # hook of LoadLibraryExW was always refused, as the second hook of the
+        # same function by one mod.
+        patch.replace_literal(
+            """        if (HookTaskbarViewDllSymbolsStartButtonPosition(module)) {
+            Wh_ApplyHookOperations();
+        }""",
+            "        RunModuleHooksTai([module] { return HookTaskbarViewDllSymbolsStartButtonPosition(module); });",
+            count=1,
+            in_function="void HandleLoadedModuleIfTaskbarView(HMODULE module, LPCWSTR lpLibFileName)",
+            label="hook Taskbar.View.dll on a worker",
+        )
+        patch.replace_regex(
+            r'\s*HMODULE kernelBaseModule = GetModuleHandle\(L"kernelbase\.dll"\);'
+            r"\s*auto pKernelBaseLoadLibraryExW =\s*\(decltype\(&LoadLibraryExW\)\)"
+            r'GetProcAddress\(kernelBaseModule,\s*"LoadLibraryExW"\);'
+            r"\s*WindhawkUtils::SetFunctionHook\(pKernelBaseLoadLibraryExW,"
+            r"\s*LoadLibraryExW_Hook_StartButtonPosition,\s*&LoadLibraryExW_Original\);",
+            "\n        // Fork addition: the taskbar icon size module's LoadLibraryExW_Hook"
+            "\n        // passes the module on (see HandleLoadedModuleIfTaskbarView).",
+            count=1,
+            in_function="BOOL Wh_ModInitStartButtonPosition()",
+            label="drop the refused LoadLibraryExW hook",
+        )
+        patch.remove_function(
+            "HMODULE WINAPI LoadLibraryExW_Hook_StartButtonPosition(",
+            label="remove the unused LoadLibraryExW hook",
+        )
+        patch.remove_literal(
+            "using LoadLibraryExW_t = decltype(&LoadLibraryExW);",
+            count=1,
+            label="remove the unused LoadLibraryExW type",
         )
 
     def _remove_unused_upstream_code(self, patch: CppPatcher) -> None:
