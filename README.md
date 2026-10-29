@@ -123,8 +123,11 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >    `CTaskBand::_UpdateItemIcon` in `taskbar.dll`, and the mod, whose hook
 >    only knew the old signature, stopped loading
 >    ([upstream issue #34](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issues/34)).
->    The hook accepts both signatures and is optional, so a future change
->    costs one layout trigger rather than the whole mod.
+>    The hook is optional, so a future change costs one layout trigger rather
+>    than the whole mod. The October 2026 preview update (26100.9818 /
+>    26200.9818) was such a change: it renamed the parameter's element type
+>    from `TaskbarIcon::Variant` to `TaskbarIcon::IconMetrics`. The hook
+>    accepts all three signatures.
 >
 > 10. **The Notification Center opens beside the island from the first click.**
 >     Upstream moves the clock and calendar flyout as Explorer reveals it, and
