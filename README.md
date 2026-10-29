@@ -198,6 +198,39 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >     Windows threads, and a helper started with arguments while another
 >     Explorer owns the taskbar skips the mod altogether.
 >
+> 15. **Explorer no longer hangs on its first start after a Windows update.**
+>     When an update replaces the taskbar's DLLs, Windhawk has to download
+>     their symbols for this mod from Microsoft before it can hook them, since
+>     Windhawk's online symbol cache only covers mods from its catalog; the
+>     October 2026 preview update needed about 185 MB. The DLLs Explorer loads
+>     after the mod, `Taskbar.View.dll`, `SystemTray.dll` and
+>     `SearchUx.UI.dll`, were hooked on the thread loading them, mostly the
+>     taskbar's, so Explorer hung until the downloads were done. Restarting it
+>     started them over, so it could hang on every start. The fork hooks those
+>     DLLs on a worker thread and lets the loading thread wait for it for at
+>     most a second. With the symbols downloaded nothing changes; until then
+>     Explorer runs with Windows' own taskbar sizes, and the taskbar is
+>     restyled as soon as the hooks are in.
+>
+> 16. **Explorer no longer re-reads symbol files on every start.**
+>     Windhawk caches the symbols a mod looks up, one entry per DLL, but a
+>     lookup that misses replaces the entry with its own symbols. The mod
+>     looks up symbols in `taskbar.dll`, `Taskbar.View.dll`, `SystemTray.dll`
+>     and `twinui.pcshell.dll` from two or three places each, so the lookups
+>     kept replacing each other's entries, and every Explorer start parsed
+>     those symbol files again, the largest 50 MB. Each lookup now includes
+>     the symbols of the earlier lookups on its DLL, so the cache holds them
+>     all.
+>
+> 17. **The Start button's hooks are set when Explorer starts with the mod on.**
+>     Both bundled mods hooked `LoadLibraryExW` to catch `Taskbar.View.dll`
+>     loading, but Windhawk lets a mod hook a function only once and refused
+>     the second hook. So whenever Explorer started with the mod already
+>     enabled, as at every sign-in, the Start button code's `Taskbar.View.dll`
+>     hooks were not set, among them the placement of the Start button's
+>     right-click menu (see 5); they worked only after the mod was turned on
+>     in a running Explorer. The two now share one hook.
+>
 > Everything else — the island auto-scaling, the WindhawkBlur engine, the
 > Y-above-taskbar clamp and Notification-Center detection — is upstream's
 > code, used as-is. Earlier versions of this fork carried their own
@@ -245,10 +278,9 @@ help: Windhawk doesn't retry a mod that failed to load there for up to 4 hours.
 The first time Explorer starts after a Windows update, Windhawk downloads
 this mod's symbols for the updated Windows files from Microsoft. After a
 large update that can take a few minutes (one in October 2026 needed about
-185 MB), and until it finishes, the taskbar can freeze. Let it finish:
-restarting Explorer starts the download over. If it doesn't recover, exit
-Windhawk from its tray icon, wait for the taskbar to come back, then start
-Windhawk again; the download then runs without holding up Explorer.
+185 MB). Until it finishes, Explorer can take a little longer to appear and
+the taskbar keeps Windows' own sizes; it is restyled once the download is
+done. Restarting Explorer meanwhile only starts the download over.
 
 ---
 
