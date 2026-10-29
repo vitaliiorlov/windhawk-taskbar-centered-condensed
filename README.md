@@ -213,7 +213,8 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 > Requires `requests` and `art`. The pipeline fetches the latest
 > `taskbar-icon-size` and `taskbar-start-button-position` from ramensoftware on
 > every run and re-applies the patches, so a build can start failing when those
-> upstream sources change. That is deliberate: `dependencies/cpp_patcher.py`
+> upstream sources change. (`taskbar-start-button-position` is pinned to v1.3.2
+> for now: v1.3.3 reworked code the patches rely on.) That is deliberate: `dependencies/cpp_patcher.py`
 > raises rather than silently emitting a broken mod. Fork changes belong in
 > `mod-parts/`, `dependencies/patches/`, or the processors — never in
 > `dependencies/modified-dependencies/`, which is regenerated output.

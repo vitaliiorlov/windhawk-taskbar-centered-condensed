@@ -9,7 +9,10 @@ from .url_processor import URLProcessor
 
 class StartButtonPosition(URLProcessor):
     def __init__(self):
-        url = "https://raw.githubusercontent.com/ramensoftware/windhawk-mods/refs/heads/main/mods/taskbar-start-button-position.wh.cpp"
+        # Pinned to v1.3.2. v1.3.3 (vertical taskbar support) reworked code
+        # that the patches below rely on, so it fails them; switch back to
+        # refs/heads/main once they are ported.
+        url = "https://raw.githubusercontent.com/ramensoftware/windhawk-mods/f54228f470bf21b8c0d7d291a80fc4d7d802084c/mods/taskbar-start-button-position.wh.cpp"
         super().__init__(url, "StartButtonPosition", "b")
 
     def format_content(self, content: str) -> str:
