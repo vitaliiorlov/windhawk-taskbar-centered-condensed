@@ -56,7 +56,8 @@ if (target == DwmTarget::StartMenu) {
 } else if (target == DwmTarget::SearchHost) {
   if (g_settings_startbuttonposition.startMenuOnTheLeft && !g_unloading) {
     g_searchMenuWnd = hwnd;
-    g_searchMenuOriginalX = x;
+    g_searchMenuOriginalPos = x;
+    g_searchMenuVertical = false;
     int localX = static_cast<int>(absStartX - (alignFlyoutInner ? flyoutInnerPaddingPx : (cx / 2.0f)));
     localX = std::max(0, std::min(localX, static_cast<int>(absRootWidth - cx)));
     x = monitorLeft + localX;
@@ -65,10 +66,10 @@ if (target == DwmTarget::StartMenu) {
     }
   } else {
     x = g_unloading && IsStartMenuOrbLeftAligned()
-            ? g_searchMenuOriginalX
+            ? g_searchMenuOriginalPos
             : monitorLeft + static_cast<int>((absRootWidth - cx) / 2);
     g_searchMenuWnd = nullptr;
-    g_searchMenuOriginalX = 0;
+    g_searchMenuOriginalPos = 0;
   }
 
 } else if (target == DwmTarget::ShellExperienceHost) {
