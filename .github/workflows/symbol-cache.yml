@@ -1,0 +1,89 @@
+# Keeps the mod's online symbol cache on the symbol-cache branch up to date.
+# When Microsoft is late with a Windows update's symbol files, Windhawk's
+# symbol cache project publishes symbols it ported from earlier builds; this
+# copies the mod's symbols from them, and the mod has Windhawk look there
+# (HookSymbolsTai). See tools/update-symbol-cache.py.
+name: Symbol cache
+
+on:
+  schedule:
+    # Hourly, like Windhawk's own cache.
+    - cron: '41 * * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - taskbar-dock-like.wh.cpp
+      - tools/update-symbol-cache.py
+      - .github/workflows/symbol-cache.yml
+  # Runs the script on a pull request's build, without pushing anything.
+  pull_request:
+    paths:
+      - taskbar-dock-like.wh.cpp
+      - tools/update-symbol-cache.py
+      - .github/workflows/symbol-cache.yml
+
+concurrency:
+  group: symbol-cache-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write  # to push the symbol-cache branch
+      actions: write  # to keep the schedule enabled
+    steps:
+      - name: Check out the mod
+        uses: actions/checkout@v7
+        with:
+          path: main
+          persist-credentials: false
+
+      - name: Check out the symbol cache
+        env:
+          REPOSITORY_URL: https://github.com/${{ github.repository }}.git
+        run: |
+          if git ls-remote --exit-code --heads "$REPOSITORY_URL" symbol-cache > /dev/null; then
+            git clone --quiet --depth 1 --branch symbol-cache "$REPOSITORY_URL" cache
+          else
+            git init --quiet --initial-branch symbol-cache cache
+          fi
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+
+      - name: Update the symbol cache
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python main/tools/update-symbol-cache.py
+          --mod main/taskbar-dock-like.wh.cpp
+          --output cache
+          --commit-message-file commit-message.txt
+
+      - name: Push the symbol cache
+        if: github.event_name != 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          cd cache
+          git add --all
+          if git diff --cached --quiet; then
+            echo "No changes."
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit --quiet --file ../commit-message.txt
+          git push --quiet "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:symbol-cache
+
+      # GitHub turns off a public repository's scheduled workflows after 60
+      # days without activity, and enabling the workflow resets that.
+      - name: Keep the schedule enabled
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/symbol-cache.yml/enable"
