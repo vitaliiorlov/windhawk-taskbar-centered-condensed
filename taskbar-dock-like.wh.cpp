@@ -2,7 +2,7 @@
 // @id              taskbar-dock-like-vo
 // @name            TAI (taskbar as island) for Windows 11 - vo fork
 // @description     Centers and floats the taskbar as an animated dock. Fork changes are listed under Details.
-// @version         1.5.275-vo
+// @version         1.5.276-vo
 // @author          vitaliiorlov (fork of DarkionAvey)
 // @github          https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed
 // @include         explorer.exe
@@ -243,6 +243,20 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 >     right-click menu (see 5); they worked only after the mod was turned on
 >     in a running Explorer. The two now share one hook.
 >
+> 18. **The mod loads when Microsoft is late with a Windows update's symbols.**
+>     Windhawk finds the functions the mod hooks in the symbol files that
+>     Microsoft publishes for each Windows build. The November 2026 update
+>     (26100.9974 / 26200.9974) arrived before its symbol files did, so the
+>     mod couldn't load and left Windows' own taskbar. The mods from
+>     Windhawk's catalog kept working, from symbols that Windhawk's
+>     [symbol cache project](https://github.com/ramensoftware/windhawk-mod-symbol-cache)
+>     ported from the previous build, but Windhawk only looks those up for
+>     its catalog. A workflow in this repository now copies the ported symbols
+>     this mod needs to its `symbol-cache` branch, checking every hour, and
+>     the mod has Windhawk look there before it downloads symbols from
+>     Microsoft (see *Symbol cache* below). For a Windows build that isn't
+>     there, the usual case, that costs one small request to GitHub.
+>
 > Everything else — the island auto-scaling, the WindhawkBlur engine, the
 > Y-above-taskbar clamp and Notification-Center detection — is upstream's
 > code, used as-is. Earlier versions of this fork carried their own
@@ -261,7 +275,22 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 > upstream sources change. That is deliberate: `dependencies/cpp_patcher.py`
 > raises rather than silently emitting a broken mod. Fork changes belong in
 > `mod-parts/`, `dependencies/patches/`, or the processors — never in
-> `dependencies/modified-dependencies/`, which is regenerated output.
+> `dependencies/modified-dependencies/`, which is regenerated output. For now
+> `taskbar-icon-size` is pinned to v1.3.10, which the last build used; v1.3.11
+> came out after it and gets ported in its own change.
+>
+> ### Symbol cache
+>
+> `.github/workflows/symbol-cache.yml` runs `tools/update-symbol-cache.py`
+> every hour and whenever the mod changes on `main`. The script reads the
+> ported symbols that windhawk-mod-symbol-cache has for the DLLs the mod
+> hooks and writes the mod's symbols from them to the `symbol-cache` branch,
+> in the format of Windhawk's online symbol cache, and the mod points Windhawk
+> at `taskbar-dock-like-vo/` there. A symbol that a ported file doesn't have
+> is left out, so Windhawk looks for it in Microsoft's symbol file, and a
+> cache file is removed once Microsoft has published that file. The script
+> needs Python 3.14 or later and nothing else; to run it by hand, give
+> `--output` a checkout of the `symbol-cache` branch.
 ---
 ## 🚀 How to Install (Development Build)
 ⚠️ **Note:** Please disable any mods that affect taskbar height or taskbar icons—this mod already includes those
@@ -281,12 +310,16 @@ If the mod doesn't start after an update (for example, when a Windows update
 broke the previous version), turn it off and on again in Windhawk; if that
 doesn't help at once, wait a minute and repeat. Restarting Explorer won't
 help: Windhawk doesn't retry a mod that failed to load there for up to 4 hours.
-The first time Explorer starts after a Windows update, Windhawk downloads
-this mod's symbols for the updated Windows files from Microsoft. After a
-large update that can take a few minutes (one in October 2026 needed about
-185 MB). Until it finishes, Explorer can take a little longer to appear and
-the taskbar keeps Windows' own sizes; it is restyled once the download is
-done. Restarting Explorer meanwhile only starts the download over.
+The first time Explorer starts after a Windows update, Windhawk looks up
+this mod's symbols for the updated Windows files. While Microsoft hasn't
+published them yet, they come from this repository's symbol cache (item 18
+under *What's different from upstream*); if the mod started before they got
+there, turn it off and on again later. Otherwise Windhawk downloads them
+from Microsoft. After a large update that can take a few minutes (one in
+October 2026 needed about 185 MB). Until it finishes, Explorer can take a
+little longer to appear and the taskbar keeps Windows' own sizes; it is
+restyled once the download is done. Restarting Explorer meanwhile only
+starts the download over.
 ---
 ## 🛠 Source Code
 The actual mod code is split into files under [
@@ -1345,12 +1378,30 @@ static std::mutex g_symbolHooksByModuleMutexTai;
 static std::unordered_map<HMODULE, std::vector<std::vector<std::wstring>>>
     g_symbolHooksByModuleTai;
 #endif
+// Fork addition: Windhawk looks the symbols up in its own cache, then online,
+// and only then in the module's symbol file, which it downloads from
+// Microsoft. Its online cache only has the mods from its catalog. When
+// Microsoft published a Windows update's symbol files late, the catalog mods
+// kept working, from symbols that Windhawk's symbol cache project ported from
+// earlier builds of the updated modules, and this mod failed to load. The
+// symbol-cache branch of this mod's repository holds those ported symbols for
+// this mod's lookups (see tools/update-symbol-cache.py), and Windhawk is told
+// to look there. A build missing from it, the usual case, is looked up in its
+// symbol file as before.
+static constexpr WCHAR kSymbolCacheUrlTai[] =
+    L"https://raw.githubusercontent.com/vitaliiorlov/"
+    L"windhawk-taskbar-centered-condensed/symbol-cache/taskbar-dock-like-vo/";
+static constexpr WH_HOOK_SYMBOLS_OPTIONS kSymbolCacheOptionsTai = {
+    .optionsSize = sizeof(WH_HOOK_SYMBOLS_OPTIONS),
+    .onlineCacheUrl = kSymbolCacheUrlTai,
+};
 bool HookSymbolsTai(HMODULE module,
                     const WindhawkUtils::SYMBOL_HOOK* symbolHooks,
                     size_t symbolHooksCount) {
 #ifdef WH_EDITING
   // The editor's view of the Windhawk API has no WH_SYMBOL_HOOK.
-  return WindhawkUtils::HookSymbols(module, symbolHooks, symbolHooksCount);
+  return WindhawkUtils::HookSymbols(module, symbolHooks, symbolHooksCount,
+                                    &kSymbolCacheOptionsTai);
 #else
   // SYMBOL_HOOK keeps its fields private; WindhawkUtils::HookSymbols hands it
   // to Windhawk as the WH_SYMBOL_HOOK it mirrors.
@@ -1409,7 +1460,7 @@ bool HookSymbolsTai(HMODULE module,
   return WindhawkUtils::HookSymbols(
       module,
       reinterpret_cast<const WindhawkUtils::SYMBOL_HOOK*>(allHooks.data()),
-      allHooks.size());
+      allHooks.size(), &kSymbolCacheOptionsTai);
 #endif
 }
 // Fork addition: hooking a module that loads after the mod normally takes
