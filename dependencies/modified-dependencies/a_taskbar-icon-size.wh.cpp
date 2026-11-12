@@ -859,12 +859,30 @@ static std::mutex g_symbolHooksByModuleMutexTai;
 static std::unordered_map<HMODULE, std::vector<std::vector<std::wstring>>>
     g_symbolHooksByModuleTai;
 #endif
+// Fork addition: Windhawk looks the symbols up in its own cache, then online,
+// and only then in the module's symbol file, which it downloads from
+// Microsoft. Its online cache only has the mods from its catalog. When
+// Microsoft published a Windows update's symbol files late, the catalog mods
+// kept working, from symbols that Windhawk's symbol cache project ported from
+// earlier builds of the updated modules, and this mod failed to load. The
+// symbol-cache branch of this mod's repository holds those ported symbols for
+// this mod's lookups (see tools/update-symbol-cache.py), and Windhawk is told
+// to look there. A build missing from it, the usual case, is looked up in its
+// symbol file as before.
+static constexpr WCHAR kSymbolCacheUrlTai[] =
+    L"https://raw.githubusercontent.com/vitaliiorlov/"
+    L"windhawk-taskbar-centered-condensed/symbol-cache/taskbar-dock-like-vo/";
+static constexpr WH_HOOK_SYMBOLS_OPTIONS kSymbolCacheOptionsTai = {
+    .optionsSize = sizeof(WH_HOOK_SYMBOLS_OPTIONS),
+    .onlineCacheUrl = kSymbolCacheUrlTai,
+};
 bool HookSymbolsTai(HMODULE module,
                     const WindhawkUtils::SYMBOL_HOOK* symbolHooks,
                     size_t symbolHooksCount) {
 #ifdef WH_EDITING
   // The editor's view of the Windhawk API has no WH_SYMBOL_HOOK.
-  return WindhawkUtils::HookSymbols(module, symbolHooks, symbolHooksCount);
+  return WindhawkUtils::HookSymbols(module, symbolHooks, symbolHooksCount,
+                                    &kSymbolCacheOptionsTai);
 #else
   // SYMBOL_HOOK keeps its fields private; WindhawkUtils::HookSymbols hands it
   // to Windhawk as the WH_SYMBOL_HOOK it mirrors.
@@ -923,7 +941,7 @@ bool HookSymbolsTai(HMODULE module,
   return WindhawkUtils::HookSymbols(
       module,
       reinterpret_cast<const WindhawkUtils::SYMBOL_HOOK*>(allHooks.data()),
-      allHooks.size());
+      allHooks.size(), &kSymbolCacheOptionsTai);
 #endif
 }
 // Fork addition: hooking a module that loads after the mod normally takes
