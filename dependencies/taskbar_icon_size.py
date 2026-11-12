@@ -9,10 +9,7 @@ from .url_processor import URLProcessor
 
 class TaskbarIconSizeMod(URLProcessor):
     def __init__(self):
-        # Pinned to v1.3.10, which the last build used. v1.3.11 (2026-10-29)
-        # came out after it and gets ported in its own change; switch back to
-        # refs/heads/main then.
-        url = "https://raw.githubusercontent.com/ramensoftware/windhawk-mods/49b891e1e34d158d345b06f3ac86c8124a7ae129/mods/taskbar-icon-size.wh.cpp"
+        url = "https://raw.githubusercontent.com/ramensoftware/windhawk-mods/refs/heads/main/mods/taskbar-icon-size.wh.cpp"
         super().__init__(url, "TBIconSize", "a")
 
     def format_content(self, content: str) -> str:
