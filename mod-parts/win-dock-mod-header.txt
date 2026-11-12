@@ -1,7 +1,7 @@
 // ==WindhawkMod==
 // @id              taskbar-dock-like-vo
 // @name            TAI (taskbar as island) for Windows 11 - vo fork
-// @description     Centers and floats the taskbar as an animated dock. Fork changes are listed under Details.
+// @description     Centers and floats the taskbar as an animated dock. Fork changes are linked under Details.
 // @version         {version_code}
 // @author          vitaliiorlov (fork of DarkionAvey)
 // @github          https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed
