@@ -2,7 +2,7 @@
 // @id              taskbar-dock-like-vo
 // @name            TAI (taskbar as island) for Windows 11 - vo fork
 // @description     Centers and floats the taskbar as an animated dock. Fork changes are listed under Details.
-// @version         1.5.276-vo
+// @version         1.5.277-vo
 // @author          vitaliiorlov (fork of DarkionAvey)
 // @github          https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed
 // @include         explorer.exe
@@ -275,9 +275,7 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 > upstream sources change. That is deliberate: `dependencies/cpp_patcher.py`
 > raises rather than silently emitting a broken mod. Fork changes belong in
 > `mod-parts/`, `dependencies/patches/`, or the processors — never in
-> `dependencies/modified-dependencies/`, which is regenerated output. For now
-> `taskbar-icon-size` is pinned to v1.3.10, which the last build used; v1.3.11
-> came out after it and gets ported in its own change.
+> `dependencies/modified-dependencies/`, which is regenerated output.
 >
 > ### Symbol cache
 >
@@ -538,6 +536,7 @@ modify the source files in the `mod-parts` directory.
 #include <winrt/Windows.UI.Xaml.Controls.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <atomic>
+#include <cmath>
 #include <functional>
 #include <limits>
 #include <mutex>
@@ -2065,6 +2064,31 @@ bool IsRuntimeClass(void* pThis, std::wstring_view className) {
     }
     return it->second == className;
 }
+// Newer C++/WinRT versions call property setters through consume_general, which
+// is passed the ABI method as a pointer to a member function, i.e. a thunk
+// which loads the method from the vtable. Returns the thunk's vtable offset.
+size_t GetVcallThunkVtableOffset(void* thunk) {
+#if defined(_M_X64)
+    // mov rax, [rcx]
+    // mov rax, [rax+0x90]
+    static const std::regex regex(R"(mov \w+, \[\w+\+0x([0-9a-f]+)\])",
+                                  std::regex_constants::icase);
+#elif defined(_M_ARM64)
+    // ldr x16, [x0]
+    // ldr x16, [x16, #0x90]
+    static const std::regex regex(R"(ldr\s+x\d+, \[x\d+, #0x([0-9a-f]+)\])",
+                                  std::regex_constants::icase);
+#else
+#error "Unsupported architecture"
+#endif
+    return OffsetFromAssemblyRegex(thunk, 0, regex, 2);
+}
+// IFrameworkElement vtable offsets, past the 6 IInspectable methods.
+constexpr size_t kFrameworkElementPutWidthOffset = (6 + 10) * sizeof(void*);
+constexpr size_t kFrameworkElementPutHeightOffset = (6 + 12) * sizeof(void*);
+using FrameworkElement_SetDouble_t = void(WINAPI*)(void* pThis,
+                                                   void* method,
+                                                   double* value);
 // enumTaskbarSize is a winrt::WindowsUdk::UI::Shell::TaskbarSize: 0 small, 1
 // regular, 2 large. The mod isn't compatible with the small size, so the
 // taskbar is made to see the regular size instead.
@@ -2404,6 +2428,52 @@ LONG GetTaskbarFrameOffset() {
 void TaskbarController_OnGroupingModeChanged_InitOffsets() {
     GetTaskbarFrameOffset();
 }
+// With custom scaling, the DPI is the scaling percentage rounded to a whole DPI
+// value, e.g. 106 for 110%. The taskbar window height is scaled by the DPI, but
+// XAML scales by the exact percentage, and when the two round to a different
+// pixel count, the frame leaves a gap below it or gets cut off. Returns the
+// height which XAML scales to the window height.
+double GetFrameHeightMatchingWindow(FrameworkElement frameElement, int height) {
+    auto xamlRoot = frameElement.XamlRoot();
+    if (!xamlRoot) {
+        return height;
+    }
+    double scale = xamlRoot.RasterizationScale();
+    int dpi = static_cast<int>(std::lround(scale * 96));
+    int windowHeight = MulDiv(height, dpi, 96);
+    if (std::floor(height * scale + 0.5) == windowHeight) {
+        return height;
+    }
+    return windowHeight / scale;
+}
+bool ApplyFrameHeightMatchingWindow(FrameworkElement frameElement) {
+    int taskbarHeight = g_taskbarHeight;
+    if (g_unloading || !taskbarHeight ||
+        frameElement.Height() != taskbarHeight) {
+        return false;
+    }
+    double height = GetFrameHeightMatchingWindow(frameElement, taskbarHeight);
+    if (height == taskbarHeight || IsVerticalTaskbar()) {
+        return false;
+    }
+    Wh_Log(L"Adjusting frame height for the XAML scale: %d->%f", taskbarHeight,
+           height);
+    frameElement.Height(height);
+    return true;
+}
+void UpdateTaskbarFrameContentGridHeight(FrameworkElement taskbarFrameElement) {
+    auto contentGrid = Media::VisualTreeHelper::GetParent(taskbarFrameElement)
+                           .try_as<FrameworkElement>();
+    if (contentGrid) {
+        double height = taskbarFrameElement.Height();
+        double contentGridHeight = contentGrid.Height();
+        if (contentGridHeight > 0 && contentGridHeight != height) {
+            Wh_Log(L"Adjusting contentGrid.Height: %f->%f", contentGridHeight,
+                   height);
+            contentGrid.Height(height);
+        }
+    }
+}
 using TaskbarController_OnGroupingModeChanged_t = void(WINAPI*)(void* pThis);
 TaskbarController_OnGroupingModeChanged_t
     TaskbarController_OnGroupingModeChanged_Hook_Original;
@@ -2443,18 +2513,7 @@ void WINAPI TaskbarController_UpdateFrameHeight_Hook(void* pThis) {
     }
     taskbarFrameElement.MaxHeight(std::numeric_limits<double>::infinity());
     TaskbarController_UpdateFrameHeight_Original(pThis);
-    // Adjust parent grid height if needed.
-    auto contentGrid = Media::VisualTreeHelper::GetParent(taskbarFrameElement)
-                           .try_as<FrameworkElement>();
-    if (contentGrid) {
-        double height = taskbarFrameElement.Height();
-        double contentGridHeight = contentGrid.Height();
-        if (contentGridHeight > 0 && contentGridHeight != height) {
-            Wh_Log(L"Adjusting contentGrid.Height: %f->%f", contentGridHeight,
-                   height);
-            contentGrid.Height(height);
-        }
-    }
+    UpdateTaskbarFrameContentGridHeight(taskbarFrameElement);
 }
 using SystemTraySecondaryController_UpdateFrameSize_t =
     void(WINAPI*)(void* pThis);
@@ -2476,6 +2535,58 @@ void WINAPI SystemTrayFrame_Height_Hook(void* pThis, double value) {
         value = g_taskbarHeight;
     }
     SystemTrayFrame_Height_Original(pThis, value);
+}
+// The height setter in builds with newer C++/WinRT versions.
+FrameworkElement_SetDouble_t SystemTrayFrame_SetDouble_Original;
+void WINAPI SystemTrayFrame_SetDouble_Hook(void* pThis,
+                                           void* method,
+                                           double* value) {
+    //
+    if (g_inSystemTrayController_UpdateFrameSize && g_taskbarHeight &&
+        GetVcallThunkVtableOffset(method) == kFrameworkElementPutHeightOffset &&
+        !IsVerticalTaskbar()) {
+        double height = g_taskbarHeight;
+        SystemTrayFrame_SetDouble_Original(pThis, method, &height);
+        return;
+    }
+    SystemTrayFrame_SetDouble_Original(pThis, method, value);
+}
+// The omni button style and the show desktop button column width are picked by
+// comparing the frame height with the stock 24 (collapsed), 32 (small) and 72
+// (tablet posture), and collapsed omni buttons don't take input. The checks get
+// the stock height, and only they do, as the linker folds the height getter
+// with the one of unrelated elements, such as the taskbar frame, on some
+// builds.
+thread_local bool g_inSystemTrayFrameModeCheck;
+using SystemTrayFrame_GetStyle_t = int(WINAPI*)(void* pThis, void** style);
+SystemTrayFrame_GetStyle_t SystemTrayFrame_GetStyle_Original;
+int WINAPI SystemTrayFrame_GetStyle_Hook(void* pThis, void** style) {
+    g_inSystemTrayFrameModeCheck = true;
+    int ret = SystemTrayFrame_GetStyle_Original(pThis, style);
+    g_inSystemTrayFrameModeCheck = false;
+    return ret;
+}
+using SystemTrayFrame_GetShowDesktopButtonColumnWidth_t =
+    int(WINAPI*)(void* pThis, double* width);
+SystemTrayFrame_GetShowDesktopButtonColumnWidth_t
+    SystemTrayFrame_GetShowDesktopButtonColumnWidth_Original;
+int WINAPI SystemTrayFrame_GetShowDesktopButtonColumnWidth_Hook(void* pThis,
+                                                                double* width) {
+    g_inSystemTrayFrameModeCheck = true;
+    int ret =
+        SystemTrayFrame_GetShowDesktopButtonColumnWidth_Original(pThis, width);
+    g_inSystemTrayFrameModeCheck = false;
+    return ret;
+}
+using SystemTrayFrame_Height_get_t = double(WINAPI*)(void* pThis);
+SystemTrayFrame_Height_get_t SystemTrayFrame_Height_get_Original;
+double WINAPI SystemTrayFrame_Height_get_Hook(void* pThis) {
+    //
+    if (g_inSystemTrayFrameModeCheck && !IsVerticalTaskbar() &&
+        g_originalTaskbarHeight) {
+        return g_originalTaskbarHeight;
+    }
+    return SystemTrayFrame_Height_get_Original(pThis);
 }
 // The system tray takes the taskbar mode from the extent it's measured with, so
 // a custom height matching a stock one (24, 32, 72) gives it that mode's tray
@@ -2514,6 +2625,13 @@ int WINAPI SystemTrayFrame_MeasureOverride_Hook(
     void* pThis,
     winrt::Windows::Foundation::Size size,
     winrt::Windows::Foundation::Size* resultSize) {
+    FrameworkElement systemTrayFrameElement = nullptr;
+    ((IUnknown*)pThis)
+        ->QueryInterface(winrt::guid_of<FrameworkElement>(),
+                         winrt::put_abi(systemTrayFrameElement));
+    if (systemTrayFrameElement) {
+        ApplyFrameHeightMatchingWindow(systemTrayFrameElement);
+    }
     // The substitution needs the hook that hands the real available size back
     // to the measure, and has nothing to fix for a vertical taskbar, which
     // marks the mode with the width, not the customized height.
@@ -2540,10 +2658,37 @@ int WINAPI TaskbarFrame_MeasureOverride_Hook(
     winrt::Windows::Foundation::Size size,
     winrt::Windows::Foundation::Size* resultSize) {
     g_hookCallCounter++;
+    // The XAML scale is only known once the frame is in the visual tree, which
+    // it is when measured.
+    FrameworkElement taskbarFrameElement = nullptr;
+    ((IUnknown*)pThis)
+        ->QueryInterface(winrt::guid_of<FrameworkElement>(),
+                         winrt::put_abi(taskbarFrameElement));
+    if (taskbarFrameElement &&
+        ApplyFrameHeightMatchingWindow(taskbarFrameElement)) {
+        UpdateTaskbarFrameContentGridHeight(taskbarFrameElement);
+    }
     int ret = TaskbarFrame_MeasureOverride_Original(pThis, size, resultSize);
     g_pendingMeasureOverride = false;
     g_hookCallCounter--;
     return ret;
+}
+// The small frame state is picked by comparing the frame size against the stock
+// 32, which a customized taskbar height matches by coincidence, so the buttons
+// are laid out for a posture the taskbar isn't in, most visibly the widgets
+// button, which renders its card for the small extent. The taskbar is made to
+// see the regular size anyway.
+using TaskbarFrame_UpdateIsSmallFrame_t = void(WINAPI*)(void* pThis,
+                                                        bool isSmallFrame);
+TaskbarFrame_UpdateIsSmallFrame_t TaskbarFrame_UpdateIsSmallFrame_Original;
+void WINAPI TaskbarFrame_UpdateIsSmallFrame_Hook(void* pThis,
+                                                 bool isSmallFrame) {
+    Wh_Log(L"> isSmallFrame=%d", isSmallFrame);
+    if (isSmallFrame && !g_unloading) {
+        Wh_Log(L"Setting isSmallFrame to false");
+        isSmallFrame = false;
+    }
+    TaskbarFrame_UpdateIsSmallFrame_Original(pThis, isSmallFrame);
 }
 // TaskbarFrame looks the button extents up in the resource dictionary once, in
 // OnApplyTemplate, and keeps them. The overflow flyout looks them up again and
@@ -3293,21 +3438,38 @@ if (changed) {
     panelElement.UpdateLayout();
 }
 }
+// The hooked setters are folded with the ones of other element types, and other
+// elements are given the posture height as well, such as the running indicator,
+// whose small posture extent is 16.
+bool IsProgressBarPostureWidth(void* pThis, double width) {
+    return g_taskListButtonPostureIconHeight &&
+           width == g_taskListButtonPostureIconHeight &&
+           IsRuntimeClass(pThis, L"Microsoft.UI.Xaml.Controls.ProgressBar");
+}
 using ProgressBar_Width_t = void(WINAPI*)(void* pThis, double width);
 ProgressBar_Width_t ProgressBar_Width_Original;
 void WINAPI ProgressBar_Width_Hook(void* pThis, double width) {
     Wh_Log(L"> width=%f", width);
-    // The setter is folded with the ones of other element types, and other
-    // elements are given the posture height as well, such as the running
-    // indicator, whose small posture extent is 16.
-    if (g_taskListButtonPostureIconHeight &&
-        width == g_taskListButtonPostureIconHeight &&
-        IsRuntimeClass(pThis, L"Microsoft.UI.Xaml.Controls.ProgressBar")) {
+    if (IsProgressBarPostureWidth(pThis, width)) {
         width = g_taskListButtonCustomIconHeight;
         Wh_Log(L"Setting width: %f->%f", g_taskListButtonPostureIconHeight,
                width);
     }
     ProgressBar_Width_Original(pThis, width);
+}
+// The width setter in builds with newer C++/WinRT versions.
+FrameworkElement_SetDouble_t ProgressBar_SetDouble_Original;
+void WINAPI ProgressBar_SetDouble_Hook(void* pThis,
+                                       void* method,
+                                       double* value) {
+    if (IsProgressBarPostureWidth(pThis, *value) &&
+        GetVcallThunkVtableOffset(method) == kFrameworkElementPutWidthOffset) {
+        double width = g_taskListButtonCustomIconHeight;
+        Wh_Log(L"Setting width: %f->%f", *value, width);
+        ProgressBar_SetDouble_Original(pThis, method, &width);
+        return;
+    }
+    ProgressBar_SetDouble_Original(pThis, method, value);
 }
 using SHAppBarMessage_t = decltype(&SHAppBarMessage);
 SHAppBarMessage_t SHAppBarMessage_Original;
@@ -3539,6 +3701,30 @@ bool HookSystemTraySymbols(HMODULE module) {
             true,  // From Windows 11 version 22H2.
         },
         {
+            {LR"(void __cdecl winrt::impl::consume_general<struct winrt::Windows::UI::Xaml::IFrameworkElement,struct winrt::SystemTray::SystemTrayFrame,int (__cdecl winrt::impl::abi<struct winrt::Windows::UI::Xaml::IFrameworkElement,void>::type::*)(double) noexcept,double &>(struct winrt::SystemTray::SystemTrayFrame const *,int (__cdecl winrt::impl::abi<struct winrt::Windows::UI::Xaml::IFrameworkElement,void>::type::*)(double) noexcept,double &))"},
+            &SystemTrayFrame_SetDouble_Original,
+            SystemTrayFrame_SetDouble_Hook,
+            true,  // From SystemTray.dll 2609.4001.0.6000.
+        },
+        {
+            {LR"(public: virtual int __cdecl winrt::impl::produce<struct winrt::SystemTray::implementation::SystemTrayFrame,struct winrt::SystemTray::ISystemTrayFrame>::GetStyle(void * *))"},
+            &SystemTrayFrame_GetStyle_Original,
+            SystemTrayFrame_GetStyle_Hook,
+            true,  // Missing in older Windows 11 versions.
+        },
+        {
+            {LR"(public: virtual int __cdecl winrt::impl::produce<struct winrt::SystemTray::implementation::SystemTrayFrame,struct winrt::SystemTray::ISystemTrayFrame>::GetShowDesktopButtonColumnWidth(double *))"},
+            &SystemTrayFrame_GetShowDesktopButtonColumnWidth_Original,
+            SystemTrayFrame_GetShowDesktopButtonColumnWidth_Hook,
+            true,  // Missing in older Windows 11 versions.
+        },
+        {
+            {LR"(public: __cdecl winrt::impl::consume_Windows_UI_Xaml_IFrameworkElement<struct winrt::SystemTray::implementation::SystemTrayFrame>::Height(void)const )"},
+            &SystemTrayFrame_Height_get_Original,
+            SystemTrayFrame_Height_get_Hook,
+            true,  // Missing in older Windows 11 versions.
+        },
+        {
             {LR"(public: virtual int __cdecl winrt::impl::produce<struct winrt::SystemTray::implementation::SystemTrayFrame,struct winrt::Windows::UI::Xaml::IFrameworkElementOverrides>::MeasureOverride(struct winrt::Windows::Foundation::Size,struct winrt::Windows::Foundation::Size *))"},
             &SystemTrayFrame_MeasureOverride_Original,
             SystemTrayFrame_MeasureOverride_Hook,
@@ -3687,6 +3873,12 @@ bool HookTaskbarViewDllSymbols(HMODULE module,
                 TaskbarFrame_MeasureOverride_Hook,
             },
             {
+                {LR"(public: void __cdecl winrt::Taskbar::implementation::TaskbarFrame::UpdateIsSmallFrame(bool))"},
+                &TaskbarFrame_UpdateIsSmallFrame_Original,
+                TaskbarFrame_UpdateIsSmallFrame_Hook,
+                true,  // Missing in older Windows 11 versions.
+            },
+            {
                 {LR"(public: struct winrt::Taskbar::implementation::TaskbarFrameMetrics __cdecl winrt::Taskbar::implementation::TaskbarFrame::GetMetrics(void)const )"},
                 &TaskbarFrame_GetMetrics_Original,
                 TaskbarFrame_GetMetrics_Hook,
@@ -3766,7 +3958,13 @@ bool HookTaskbarViewDllSymbols(HMODULE module,
                 ProgressBar_Width_Hook,
                 true,  // From Windows 11 version 22H2.
             },
-        };
+            {
+                {LR"(void __cdecl winrt::impl::consume_general<struct winrt::Windows::UI::Xaml::IFrameworkElement,struct winrt::Microsoft::UI::Xaml::Controls::ProgressBar,int (__cdecl winrt::impl::abi<struct winrt::Windows::UI::Xaml::IFrameworkElement,void>::type::*)(double) noexcept,double &>(struct winrt::Microsoft::UI::Xaml::Controls::ProgressBar const *,int (__cdecl winrt::impl::abi<struct winrt::Windows::UI::Xaml::IFrameworkElement,void>::type::*)(double) noexcept,double &))"},
+                &ProgressBar_SetDouble_Original,
+                ProgressBar_SetDouble_Hook,
+                true,  // From Taskbar.View.dll 2609.10000.100.6000.
+            },
+    };
     // On older Taskbar.View.dll versions (before the SystemTray types moved out
     // into SystemTray.dll), these SystemTray symbols live in Taskbar.View.dll
     // itself, so include them in the same hook batch when
@@ -3802,6 +4000,24 @@ bool HookTaskbarViewDllSymbols(HMODULE module,
             &SystemTrayFrame_Height_Original,
             SystemTrayFrame_Height_Hook,
             true,  // From Windows 11 version 22H2.
+        },
+        {
+            {LR"(public: virtual int __cdecl winrt::impl::produce<struct winrt::SystemTray::implementation::SystemTrayFrame,struct winrt::SystemTray::ISystemTrayFrame>::GetStyle(void * *))"},
+            &SystemTrayFrame_GetStyle_Original,
+            SystemTrayFrame_GetStyle_Hook,
+            true,  // Missing in older Windows 11 versions.
+        },
+        {
+            {LR"(public: virtual int __cdecl winrt::impl::produce<struct winrt::SystemTray::implementation::SystemTrayFrame,struct winrt::SystemTray::ISystemTrayFrame>::GetShowDesktopButtonColumnWidth(double *))"},
+            &SystemTrayFrame_GetShowDesktopButtonColumnWidth_Original,
+            SystemTrayFrame_GetShowDesktopButtonColumnWidth_Hook,
+            true,  // Missing in older Windows 11 versions.
+        },
+        {
+            {LR"(public: __cdecl winrt::impl::consume_Windows_UI_Xaml_IFrameworkElement<struct winrt::SystemTray::implementation::SystemTrayFrame>::Height(void)const )"},
+            &SystemTrayFrame_Height_get_Original,
+            SystemTrayFrame_Height_get_Hook,
+            true,  // Missing in older Windows 11 versions.
         },
         {
             {LR"(public: virtual int __cdecl winrt::impl::produce<struct winrt::SystemTray::implementation::SystemTrayFrame,struct winrt::Windows::UI::Xaml::IFrameworkElementOverrides>::MeasureOverride(struct winrt::Windows::Foundation::Size,struct winrt::Windows::Foundation::Size *))"},

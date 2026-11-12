@@ -263,9 +263,7 @@ instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issu
 > upstream sources change. That is deliberate: `dependencies/cpp_patcher.py`
 > raises rather than silently emitting a broken mod. Fork changes belong in
 > `mod-parts/`, `dependencies/patches/`, or the processors — never in
-> `dependencies/modified-dependencies/`, which is regenerated output. For now
-> `taskbar-icon-size` is pinned to v1.3.10, which the last build used; v1.3.11
-> came out after it and gets ported in its own change.
+> `dependencies/modified-dependencies/`, which is regenerated output.
 >
 > ### Symbol cache
 >
