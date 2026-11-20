@@ -1,8 +1,8 @@
 // ==WindhawkMod==
 // @id              taskbar-dock-like-vo
 // @name            TAI (taskbar as island) for Windows 11 - vo fork
-// @description     Centers and floats the taskbar as an animated dock. Fork changes are linked under Details.
-// @version         1.5.278-vo
+// @description     Centers and floats the taskbar as an animated dock and moves the tray area next to it. Maintained for the 2026 Windows 11 builds.
+// @version         1.5.279-vo
 // @author          vitaliiorlov (fork of DarkionAvey)
 // @github          https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed
 // @include         explorer.exe
@@ -13,8 +13,10 @@
 // @architecture    x86-64
 // ==/WindhawkMod==
 // This mod is based on code released under the GNU General Public License v3.0.
-// Fork of https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed
-// For bug reports and feedback about this fork:
+// Upstream (unmaintained since June 2026):
+// https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed
+// This fork is the maintained build for the 2026 Windows 11 builds
+// (26100.9818, 26100/26200/26300.9974); bug reports and feedback go here:
 // https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed
 // ==WindhawkModReadme==
 /*
@@ -22,15 +24,17 @@
 # TAI (Taskbar as (an) island) for Windows 11
 TAI lets you transform your Windows 11 taskbar into a smooth floating dock without losing any of the original taskbar functionality!
 # Bug reports
-This is a fork. File issues with **this fork** here: https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed/issues
-For problems that also reproduce on upstream TAI, please report them upstream
-instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issues
+Issue tracker: https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed/issues
+Upstream TAI has been unmaintained since June 2026 and no longer works on the
+2026 Windows 11 builds, so issues reported there are unlikely to be answered.
 ---
-> ## 🍴 This is a personal fork
+> ## Where this code comes from
 >
 > Upstream: [DarkionAvey/windhawk-taskbar-centered-condensed](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed).
-> This fork ([vitaliiorlov/windhawk-taskbar-centered-condensed](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed))
-> tracks upstream closely; everything it adds or fixes on top is listed in
+> This community fork ([vitaliiorlov/windhawk-taskbar-centered-condensed](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed))
+> tracks upstream closely and carries the fixes that keep TAI working on the
+> 2026 Windows 11 builds (26100.9818, 26100/26200/26300.9974); everything it
+> adds or fixes on top is listed in
 > [What's different from upstream](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed/blob/main/FORK-CHANGES.md).
 >
 > ### ⚠️ Own mod ID since 1.5.271
