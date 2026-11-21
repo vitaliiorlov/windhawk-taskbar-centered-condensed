@@ -1,8 +1,8 @@
 // ==WindhawkMod==
 // @id              taskbar-dock-like-vo
 // @name            TAI (taskbar as island) for Windows 11 - vo fork
-// @description     Centers and floats the taskbar as an animated dock. Fork changes are linked under Details.
-// @version         1.5.278-vo
+// @description     Centers and floats the taskbar as an animated dock and moves the tray area next to it. Maintained for the 2026 Windows 11 builds.
+// @version         1.5.281-vo
 // @author          vitaliiorlov (fork of DarkionAvey)
 // @github          https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed
 // @include         explorer.exe
@@ -13,8 +13,10 @@
 // @architecture    x86-64
 // ==/WindhawkMod==
 // This mod is based on code released under the GNU General Public License v3.0.
-// Fork of https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed
-// For bug reports and feedback about this fork:
+// Upstream (unmaintained since June 2026):
+// https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed
+// This fork is the maintained build for the 2026 Windows 11 builds
+// (26100.9818, 26100/26200/26300.9974); bug reports and feedback go here:
 // https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed
 // ==WindhawkModReadme==
 /*
@@ -22,15 +24,17 @@
 # TAI (Taskbar as (an) island) for Windows 11
 TAI lets you transform your Windows 11 taskbar into a smooth floating dock without losing any of the original taskbar functionality!
 # Bug reports
-This is a fork. File issues with **this fork** here: https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed/issues
-For problems that also reproduce on upstream TAI, please report them upstream
-instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issues
+Issue tracker: https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed/issues
+Upstream TAI has been unmaintained since June 2026 and no longer works on the
+2026 Windows 11 builds, so issues reported there are unlikely to be answered.
 ---
-> ## 🍴 This is a personal fork
+> ## Where this code comes from
 >
 > Upstream: [DarkionAvey/windhawk-taskbar-centered-condensed](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed).
-> This fork ([vitaliiorlov/windhawk-taskbar-centered-condensed](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed))
-> tracks upstream closely; everything it adds or fixes on top is listed in
+> This community fork ([vitaliiorlov/windhawk-taskbar-centered-condensed](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed))
+> tracks upstream closely and carries the fixes that keep TAI working on the
+> 2026 Windows 11 builds (26100.9818, 26100/26200/26300.9974); everything it
+> adds or fixes on top is listed in
 > [What's different from upstream](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed/blob/main/FORK-CHANGES.md).
 >
 > ### ⚠️ Own mod ID since 1.5.271
@@ -127,6 +131,8 @@ modify the source files in the `mod-parts` directory.
 | `TrayTaskGap` | Tray task gap | Adjust the space between the task area and the tray area. Default is 10 | Non-negative integer |
 | `TaskbarBackgroundHorizontalPadding` | Taskbar background horizontal padding | Set the horizontal padding on both sides of the taskbar background. Default is 2 | Non-negative integer |
 | `FullWidthTaskbarBackground` | Full-width taskbar background | When enabled, the taskbar background fills the entire width of the screen, similar to the default Windows behavior. Default is off | Boolean (true/false) |
+| `TaskItemsAlignment` | Task item alignment | Where the task buttons go inside the floating bar. "island" keeps upstream's layout - the buttons are packed at the bar's left edge, next to the tray. "system" keeps them centred in the bar, the way Windows' own "Taskbar alignment" setting does, while the tray stays at the bar's right end, so raising TrayTaskGap widens the bar and separates the tray from the buttons without moving them off centre. Default is island |  |
+| `TaskbarWidth` | Taskbar width | Width of the bar's content, in the same units as the other layout settings (the horizontal padding is added around it). 0 keeps the automatic width, where the bar grows with the buttons, the tray and TrayTaskGap. With a fixed width the task buttons stay centred in the bar (with "Task item alignment" set to "system") and the tray stays at its right end, so TrayTaskGap no longer changes the width. A value that is too small is ignored - the bar never gets narrower than its content. Default is 0 | Non-negative integer |
 | `IgnoreShowDesktopButton` | Ignore "Show Desktop" button | When enabled, the "Show Desktop" button is ignored in width calculations. Default is off | Boolean (true/false) |
 | `TaskbarCornerRadius` | Taskbar corner radius | Controls how rounded the taskbar corners appear. Default is 22 | Non-negative integer |
 | `TaskButtonCornerRadius` | Task button corner radius | Controls how rounded the corners of individual task buttons are. Default is 18 | Non-negative integer |
@@ -157,6 +163,7 @@ modify the source files in the `mod-parts` directory.
 | `MoveFlyoutNotificationCenter` | Move Notification Center with Taskbar | When enabled, the Notification Center is moved to align with taskbar size and location. Default is on. | Boolean (true/false) |
 | `AlignFlyoutInner` | Align flyout windows to the inside of the taskbar | When enabled, the flyout windows will be aligned within the bounds of the taskbar. When off, they will be 50% inside the taskbar bounds. Default is on. | Boolean (true/false) |
 | `NotificationCenterPrimaryOnly` | Notification Center on primary monitor only | When enabled, the Notification Center (the clock/calendar popup) is only repositioned when opened on the primary monitor. On secondary monitors it appears at Windows' native default position. Only affects the Notification Center - Start Menu, Search and Control Center are unaffected. Default is off. | Boolean (true/false) |
+| `MoveFlyoutToasts` | Move notification toasts with Taskbar | When enabled, the notification banners Windows pops up in the bottom-right corner are moved so that they hang off the right end of the taskbar instead of the screen corner, keeping Windows' own margins. Default is on. | Boolean (true/false) |
 | `MoveFlyoutKeyboardLayout` | Move keyboard layout flyout with Taskbar | When enabled, the keyboard layout flyout (opened by clicking the language indicator or pressing Win+Space) is centered above the language indicator on the taskbar instead of at the right edge of the screen. On a monitor whose taskbar has no language indicator it is centered above the tray instead. Default is on. | Boolean (true/false) |
 | `MoveTrayContextMenus` | Move tray icon menus with Taskbar | When enabled, the right-click menus of the clock and the system tray icons (network, volume, battery, language) open at the right end of the taskbar, lined up with the Notification Center, instead of at the right edge of the screen. Default is on. | Boolean (true/false) |
 | `StartMenuOnActiveMonitor` | Open Start on the monitor in use | When enabled, the Start menu opened with the Win key (or Ctrl+Esc) opens on the monitor of the window you are working in, or the one under the mouse when the desktop or a taskbar has focus, instead of always on the main display. A taskbar's Start button already opens it on that taskbar's monitor. Only monitors with a taskbar are used. Default is on. | Boolean (true/false) |
@@ -187,6 +194,15 @@ modify the source files in the `mod-parts` directory.
 - FullWidthTaskbarBackground: false
   $name: Full-width taskbar background
   $description: When enabled, the taskbar background fills the entire width of the screen, similar to the default Windows behavior. Default is off
+- TaskItemsAlignment: "island"
+  $name: Task item alignment
+  $description: Where the task buttons go inside the floating bar. "island" keeps upstream's layout - the buttons are packed at the bar's left edge, next to the tray. "system" keeps them centred in the bar, the way Windows' own "Taskbar alignment" setting does, while the tray stays at the bar's right end, so raising TrayTaskGap widens the bar and separates the tray from the buttons without moving them off centre. Default is island
+  $options:
+  - island: This mod's island
+  - system: Windows' taskbar alignment
+- TaskbarWidth: 0
+  $name: Taskbar width
+  $description: Width of the bar's content, in the same units as the other layout settings (the horizontal padding is added around it). 0 keeps the automatic width, where the bar grows with the buttons, the tray and TrayTaskGap. With a fixed width the task buttons stay centred in the bar (with "Task item alignment" set to "system") and the tray stays at its right end, so TrayTaskGap no longer changes the width. A value that is too small is ignored - the bar never gets narrower than its content. Default is 0
 - IgnoreShowDesktopButton: false
   $name: Ignore "Show Desktop" button
   $description: When enabled, the "Show Desktop" button is ignored in width calculations. Default is off
@@ -279,6 +295,9 @@ modify the source files in the `mod-parts` directory.
 - NotificationCenterPrimaryOnly: false
   $name: Notification Center on primary monitor only
   $description: When enabled, the Notification Center (the clock/calendar popup) is only repositioned when opened on the primary monitor. On secondary monitors it appears at Windows' native default position. Only affects the Notification Center - Start Menu, Search and Control Center are unaffected. Default is off.
+- MoveFlyoutToasts: true
+  $name: Move notification toasts with Taskbar
+  $description: When enabled, the notification banners Windows pops up in the bottom-right corner are moved so that they hang off the right end of the taskbar instead of the screen corner, keeping Windows' own margins. Default is on.
 - MoveFlyoutKeyboardLayout: true
   $name: Move keyboard layout flyout with Taskbar
   $description: When enabled, the keyboard layout flyout (opened by clicking the language indicator or pressing Win+Space) is centered above the language indicator on the taskbar instead of at the right edge of the screen. On a monitor whose taskbar has no language indicator it is centered above the tray instead. Default is on.
@@ -443,6 +462,8 @@ struct ModSettings {
   uint8_t userDefinedTaskbarBorderOpacity;
   double userDefinedTaskbarBorderThickness;
   bool userDefinedFullWidthTaskbarBackground;
+  bool userDefinedFollowSystemTaskItems;
+  int userDefinedTaskbarWidth;
   bool userDefinedIgnoreShowDesktopButton;
   bool userDefinedStyleTrayArea;
   bool userDefinedTrayAreaDivider;
@@ -555,6 +576,12 @@ struct TaskbarState {
   uintptr_t backgroundFillIdentity{0};
   uint64_t lastBackgroundStyleGeneration{0};
   bool hasCustomTaskbarBackgroundVisuals{false};
+  // Fork addition: see the startup pass over Windows' own taskbar background
+  // in the background block of ApplyStyle, for the "Stylize the taskbar
+  // background" setting being off.
+  bool windowsBackgroundNormalizeStarted{false};
+  int windowsBackgroundNormalizePasses{0};
+  ULONGLONG windowsBackgroundNormalizeNextMs{0};
   uint64_t lastDimensionInvalidationGeneration{0};
   TaskbarChildStyleCache taskbarChildStyleCache;
   TaskbarChildStyleCache trayChildStyleCache;
@@ -9900,6 +9927,20 @@ void UpdateGlobalSettings() {
   auto getInt = [&](PCWSTR key) { return Wh_GetIntSetting(key); };
   auto clamp = [](int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; };
   // Booleans
+  // Fork addition: TaskItemsAlignment picks where the task buttons sit inside
+  // the bar - hugged to its left edge (`island`, the upstream look) or centred
+  // in the space the tray leaves free (`system`, what Windows' own "Taskbar
+  // alignment" setting means). See ApplyStyle.
+  PCWSTR taskItemsAlignment = Wh_GetStringSetting(L"TaskItemsAlignment");
+  g_settings.userDefinedFollowSystemTaskItems =
+      !g_unloading && taskItemsAlignment && _wcsicmp(taskItemsAlignment, L"system") == 0;
+  if (taskItemsAlignment) {
+    Wh_FreeStringSetting(taskItemsAlignment);
+  }
+  // Fork addition: TaskbarWidth pins the bar's width instead of letting the
+  // content (buttons, tray and TrayTaskGap) decide it. 0 keeps the automatic
+  // width. See ApplyStyle.
+  g_settings.userDefinedTaskbarWidth = clamp(getInt(L"TaskbarWidth"), 0, 10000);
   g_settings.userDefinedFlatTaskbarBottomCorners = (getInt(L"FlatTaskbarBottomCorners") != 0);
   g_settings.userDefinedFullWidthTaskbarBackground = (getInt(L"FullWidthTaskbarBackground") != 0) || g_unloading;
   if (g_settings.userDefinedFullWidthTaskbarBackground) g_settings.userDefinedFlatTaskbarBottomCorners = true;
@@ -10048,6 +10089,7 @@ void LogAllSettings() {
   Wh_Log(L"setting %d %s", g_settings.userDefinedTaskbarBorderOpacity, L"userDefinedTaskbarBorderOpacity");
   Wh_Log(L"setting %d %s", (int)(g_settings.userDefinedTaskbarBorderThickness * 100.0 / 10.0), L"userDefinedTaskbarBorderThickness (scaled)");
   Wh_Log(L"setting %d %s", g_settings.userDefinedFullWidthTaskbarBackground ? 1 : 0, L"userDefinedFullWidthTaskbarBackground");
+  Wh_Log(L"setting %d %s", g_settings.userDefinedFollowSystemTaskItems ? 1 : 0, L"userDefinedFollowSystemTaskItems");
   Wh_Log(L"setting %d %s", g_settings.userDefinedIgnoreShowDesktopButton ? 1 : 0, L"userDefinedIgnoreShowDesktopButton");
   Wh_Log(L"setting %d %s", g_settings.userDefinedStyleTrayArea ? 1 : 0, L"userDefinedStyleTrayArea");
   Wh_Log(L"setting %d %s", g_settings.userDefinedTrayAreaDivider ? 1 : 0, L"userDefinedTrayAreaDivider");
@@ -11738,9 +11780,54 @@ bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorNam
     Wh_Log(L"Error: trayFrameWidth <= 1");
     return false;
   }
-  const float targetContentWidth = static_cast<float>(childrenWidthTaskbar + trayFrameWidth);
+  // Fork addition: TaskItemsAlignment. The bar keeps the floating island look -
+  // centred, rounded, TaskbarOffsetY - and its width still comes from the
+  // content: the buttons, the tray and TrayTaskGap, which trayFrameWidth already
+  // carries. In `system` mode the buttons sit in the middle of the bar and the
+  // tray at its right end, so the room the tray takes on the right is mirrored on
+  // the left - the same asymmetry Windows 11 has in "Taskbar alignment: Center".
+  // Raising TrayTaskGap then widens the bar and slides the tray away from the
+  // buttons without moving them off centre.
+  const bool followSystemTaskItems = g_settings.userDefinedFollowSystemTaskItems;
+  const float taskbarBackgroundPadding =
+      static_cast<float>(g_settings.userDefinedTaskbarBackgroundHorizontalPadding);
+  // Fork addition: TaskbarWidth pins that width, in the same units, so neither
+  // the buttons nor TrayTaskGap decide it any more - the gap only moves the
+  // tray inside the width that is left. The one bound is the content itself
+  // (buttons plus tray, or they would overlap), and the screen.
+  const float automaticSystemContentWidth =
+      static_cast<float>(childrenWidthTaskbar) + (2.0f * static_cast<float>(trayFrameWidth));
+  const float minimumContentWidth =
+      static_cast<float>(childrenWidthTaskbar) + static_cast<float>(trayFrameWidth);
+  const float fixedTaskbarWidth =
+      g_settings.userDefinedTaskbarWidth > 0
+          ? static_cast<float>(g_settings.userDefinedTaskbarWidth)
+          : 0.0f;
+  float targetContentWidth;
+  if (fixedTaskbarWidth > 0.0f) {
+    targetContentWidth = std::min(static_cast<float>(rootWidth),
+                                  std::max(fixedTaskbarWidth, minimumContentWidth));
+    if (g_settings.userDefinedTaskbarWidth != 0 &&
+        static_cast<float>(g_settings.userDefinedTaskbarWidth) != targetContentWidth) {
+      Wh_Log(L"[TaskbarWidth] %d -> %.2f (content needs %.2f)",
+             g_settings.userDefinedTaskbarWidth, targetContentWidth,
+             minimumContentWidth);
+    }
+  } else {
+    targetContentWidth = followSystemTaskItems
+        ? automaticSystemContentWidth
+        : minimumContentWidth;
+  }
   const float targetContentLeft = snapPx(static_cast<float>((rootWidth - targetContentWidth) / 2.0f));
-  const float targetTrayLogicalLeft = snapPx(targetContentLeft + static_cast<float>(childrenWidthTaskbar));
+  // Centre the buttons in the bar; with the automatic width this is the same
+  // as leaving the tray's width free on the left.
+  const float taskButtonsLeft = followSystemTaskItems
+      ? snapPx(targetContentLeft +
+               ((targetContentWidth - static_cast<float>(childrenWidthTaskbar)) / 2.0f))
+      : targetContentLeft;
+  const float targetTrayLogicalLeft = followSystemTaskItems
+      ? snapPx(targetContentLeft + targetContentWidth - static_cast<float>(trayFrameWidth))
+      : snapPx(targetContentLeft + static_cast<float>(childrenWidthTaskbar));
   float targetOffsetXTray = snapPx(targetTrayLogicalLeft - static_cast<float>(rootWidth - trayFrameWidth));
   // tray animations
   auto systemTrayFrameGridVisual = winrt::Windows::UI::Xaml::Hosting::ElementCompositionPreview::GetElementVisual(systemTrayFrameGrid);
@@ -11860,14 +11947,11 @@ bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorNam
   const double taskbarAnchorLeft = useStableStartButtonAnchor
       ? static_cast<double>(state.stableStartButtonAnchorLeft)
       : fallbackTaskbarAnchorLeft;
-  float targetTaskRootOffsetX = snapPx(targetContentLeft - static_cast<float>(taskbarAnchorLeft));
-  float centeredTaskbarRightEdge = targetTrayLogicalLeft;
-  const float taskbarBackgroundPadding =
-      static_cast<float>(g_settings.userDefinedTaskbarBackgroundHorizontalPadding);
+  float targetTaskRootOffsetX = snapPx(taskButtonsLeft - static_cast<float>(taskbarAnchorLeft));
+  float centeredTaskbarRightEdge = snapPx(taskButtonsLeft + static_cast<float>(childrenWidthTaskbar));
   float targetWidth = g_unloading
       ? static_cast<float>(rootWidth)
-      : (static_cast<float>(childrenWidthTaskbar + trayFrameWidth) +
-         (taskbarBackgroundPadding * 2.0f));
+      : (targetContentWidth + (taskbarBackgroundPadding * 2.0f));
   if (targetWidth < 1) {
     Wh_Log(L"Error: targetWidth<1");
     return false;
@@ -12145,8 +12229,12 @@ bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorNam
         if (compositorWidget) {
           // Widget visual is inside the RootGrid-shifted subtree, so its local
           // target must exclude the RootGrid compositor offset. Its screen
-          // position still lands after the centered task buttons.
-          float targetOffsetXWidget = centeredTaskbarRightEdge - targetTaskRootOffsetX - 8.0f + g_settings.userDefinedTrayTaskGap;
+          // position still lands after the task buttons (`island`) or just
+          // before the tray, which is no longer glued to them (`system`).
+          float targetOffsetXWidget = followSystemTaskItems
+              ? targetTrayLogicalLeft - static_cast<float>(widgetElementVisibleWidth) -
+                    8.0f - targetTaskRootOffsetX
+              : centeredTaskbarRightEdge - targetTaskRootOffsetX - 8.0f + g_settings.userDefinedTrayTaskGap;
           targetOffsetXWidget = snapPx(targetOffsetXWidget);
           float targetOffsetYWidget = snapPx(static_cast<float>(abs(g_settings.userDefinedTaskbarHeight - widgetElementVisibleHeight)));
           const bool widgetOffsetChanged =
@@ -12218,7 +12306,40 @@ bool ApplyStyle(FrameworkElement const& xamlRootContent, std::wstring monitorNam
   //    SetDividerForElement(widgetElementInnerChild, clipHeight, widgetPresent && g_settings.userDefinedTrayAreaDivider, true);
   //  }
   const bool shouldApplyCustomTaskbarBackground = !g_unloading && g_settings.userDefinedCustomizeTaskbarBackground;
-  const bool shouldClearCustomTaskbarBackground = g_unloading || (!shouldApplyCustomTaskbarBackground && state.hasCustomTaskbarBackgroundVisuals);
+  // Fork addition. With this mod's background switched off, nothing ever sets
+  // Windows' own taskbar background fill, and the fill Explorer starts with at
+  // logon can stay as it is: a flat grey bar (Windows draws the background
+  // without transparency until its effects are up) that only went away when
+  // "Stylize the taskbar background" was switched on and off once, because
+  // switching it off puts the fill back. So put it back here, a few times over
+  // the first seconds of the process, which is when the taskbar is built.
+  const ULONGLONG nowMs = GetTickCount64();
+  bool shouldNormalizeWindowsTaskbarBackground = false;
+  if (shouldApplyCustomTaskbarBackground) {
+    // Re-arm, so switching the setting off later gets its own pass, the way
+    // toggling it by hand always did.
+    state.windowsBackgroundNormalizeStarted = false;
+    state.windowsBackgroundNormalizePasses = 0;
+  } else if (!g_unloading) {
+    if (!state.windowsBackgroundNormalizeStarted) {
+      state.windowsBackgroundNormalizeStarted = true;
+      state.windowsBackgroundNormalizePasses = 3;
+      state.windowsBackgroundNormalizeNextMs = nowMs;
+    }
+    if (state.windowsBackgroundNormalizePasses > 0 &&
+        nowMs >= state.windowsBackgroundNormalizeNextMs) {
+      shouldNormalizeWindowsTaskbarBackground = true;
+      --state.windowsBackgroundNormalizePasses;
+      // Spread the passes over the startup instead of clearing on every style
+      // pass, which would flicker against whatever Windows sets in between.
+      state.windowsBackgroundNormalizeNextMs = nowMs + 2000;
+    }
+  }
+  const bool shouldClearCustomTaskbarBackground =
+      g_unloading ||
+      (!shouldApplyCustomTaskbarBackground &&
+       (state.hasCustomTaskbarBackgroundVisuals ||
+        shouldNormalizeWindowsTaskbarBackground));
   auto taskbarStroke = FindChildByName(backgroundFillParent, L"BackgroundStroke");
   auto screenEdgeStroke = FindChildByName(rootGridTaskBar, L"ScreenEdgeStroke");
   // you can also try SystemAccentColor
@@ -12563,10 +12684,15 @@ BOOL WINAPI SetWindowPos_Hook(HWND hWnd, HWND hWndInsertAfter, int X, int Y, int
   const bool isInputSwitch =
       _wcsicmp(className, L"Shell_InputSwitchTopLevelWindow") == 0;
   const bool isControlCenter = _wcsicmp(className, L"ControlCenterWindow") == 0;
+  // ShellExperienceHost's XAML host window: the notification toasts and the
+  // clock flyout. Which of the two it is, is decided below.
+  const bool isShellExperienceWindow =
+      _wcsicmp(className, L"Windows.UI.Core.CoreWindow") == 0;
   const bool isTaskbar = _wcsicmp(className, L"Shell_TrayWnd") == 0 ||
                          _wcsicmp(className, L"Shell_SecondaryTrayWnd") == 0;
   DWORD processId = 0;
-  if ((!isInputSwitch && !isControlCenter && !isTaskbar) ||
+  if ((!isInputSwitch && !isControlCenter && !isShellExperienceWindow &&
+       !isTaskbar) ||
       !GetWindowThreadProcessId(hWnd, &processId)) {
     return callOriginal();
   }
@@ -12611,6 +12737,78 @@ BOOL WINAPI SetWindowPos_Hook(HWND hWnd, HWND hWndInsertAfter, int X, int Y, int
       Wh_Log(L"[SetWindowPos] New X %d", X);
     } else {
       Wh_Log(L"[SetWindowPos] No reference state for monitor %s", monitorName.c_str());
+    }
+  }
+  // Fork addition: the notification toasts are the ShellExperienceHost
+  // CoreWindow Windows right-aligns to the work area, which the island leaves
+  // empty - they hung out over the strip beside the bar. They are recognised
+  // by geometry (narrow, and still against the work area's right edge) and not
+  // by their localized title, and are moved the distance the tray is inset
+  // from the monitor edge, so Windows' own margins are kept but the banner
+  // hangs off the bar's right end. Two details make this work:
+  // - Windows moves a toast with SWP_NOSIZE (cx and cy are zero) and often with
+  //   SWP_NOMOVE as well, so the size and the current X are taken from the
+  //   window rect in those cases instead of from the arguments.
+  // - the position is computed absolutely from the toast's own right margin,
+  //   never from the current X, so a second call cannot move it twice. Once
+  //   moved it is no longer at the work area's edge and is left alone, which
+  //   also keeps the clock flyout (placed absolutely by
+  //   PlaceNotificationCenterViewRectTai, beside the tray) out of the way.
+  if (isShellExperienceWindow &&
+      Wh_GetIntSetting(L"MoveFlyoutToasts") != 0 &&
+      _wcsicmp(GetProcessExeName(processId).c_str(),
+               L"ShellExperienceHost.exe") == 0) {
+    HMONITOR monitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO monitorInfo{.cbSize = sizeof(MONITORINFO)};
+    RECT windowRect{};
+    if (monitor && GetMonitorInfoW(monitor, &monitorInfo) &&
+        GetWindowRect(hWnd, &windowRect)) {
+      const int windowWidth = (uFlags & SWP_NOSIZE) || cx == 0
+                                  ? windowRect.right - windowRect.left
+                                  : cx;
+      const int windowX = (uFlags & SWP_NOMOVE) ? windowRect.left : X;
+      const int rightMargin =
+          monitorInfo.rcWork.right - (windowX + windowWidth);
+      auto monitorName = GetMonitorName(monitor);
+      int lastRecordedTrayRightMostEdgeForMonitor =
+          monitorName.empty()
+              ? -1
+              : Wh_GetIntValue((L"lastRightMostEdgeTray_" + monitorName).c_str(), -1);
+      UINT monitorDpiX = 96;
+      UINT monitorDpiY = 96;
+      if (FAILED(GetDpiForMonitor(monitor, MDT_DEFAULT, &monitorDpiX,
+                                 &monitorDpiY)) ||
+          monitorDpiX == 0) {
+        monitorDpiX = 96;
+        monitorDpiY = 96;
+      }
+      const float dpiScale = static_cast<float>(monitorDpiX) / 96.0f;
+      const int trayRightOnScreen =
+          lastRecordedTrayRightMostEdgeForMonitor > 0
+              ? monitorInfo.rcMonitor.left +
+                    static_cast<int>(lastRecordedTrayRightMostEdgeForMonitor *
+                                     dpiScale)
+              : monitorInfo.rcMonitor.right;
+      // Toast banners are narrow and sit flush against the work area's right
+      // edge, past the end of the bar; the clock flyout is neither by the time
+      // it is placed, and a toast that has already been moved no longer reaches
+      // past the tray, so this runs once per toast.
+      const int monitorWidth =
+          monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left;
+      const bool isToast =
+          windowWidth > 0 &&
+          windowWidth <= std::max(800, monitorWidth / 3) &&
+          rightMargin >= -16 && rightMargin <= 128 &&
+          windowX + windowWidth > trayRightOnScreen;
+      if (isToast && lastRecordedTrayRightMostEdgeForMonitor > 0) {
+        const int newX = trayRightOnScreen - rightMargin - windowWidth;
+        if (newX < windowX) {
+          Wh_Log(L"[Toast] %s: X %d -> %d (cx=%d margin=%d)",
+                 monitorName.c_str(), windowX, newX, windowWidth, rightMargin);
+          X = newX;
+          uFlags &= ~SWP_NOMOVE;
+        }
+      }
     }
   }
   // Fork addition: see TaskbarRevealZoneTai.

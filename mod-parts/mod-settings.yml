@@ -33,6 +33,18 @@
   $description: When enabled, the taskbar background fills the entire width of the screen, similar to the default Windows behavior. Default is off
   $type: bool
 
+- TaskItemsAlignment: "island"
+  $name: Task item alignment
+  $description: Where the task buttons go inside the floating bar. "island" keeps upstream's layout - the buttons are packed at the bar's left edge, next to the tray. "system" keeps them centred in the bar, the way Windows' own "Taskbar alignment" setting does, while the tray stays at the bar's right end, so raising TrayTaskGap widens the bar and separates the tray from the buttons without moving them off centre. Default is island
+  $options:
+  - island: This mod's island
+  - system: Windows' taskbar alignment
+
+- TaskbarWidth: 0
+  $name: Taskbar width
+  $description: Width of the bar's content, in the same units as the other layout settings (the horizontal padding is added around it). 0 keeps the automatic width, where the bar grows with the buttons, the tray and TrayTaskGap. With a fixed width the task buttons stay centred in the bar (with "Task item alignment" set to "system") and the tray stays at its right end, so TrayTaskGap no longer changes the width. A value that is too small is ignored - the bar never gets narrower than its content. Default is 0
+  $type: unsigned int
+
 - IgnoreShowDesktopButton: false
   $name: Ignore "Show Desktop" button
   $description: When enabled, the "Show Desktop" button is ignored in width calculations. Default is off
@@ -182,6 +194,11 @@
 - NotificationCenterPrimaryOnly: false
   $name: Notification Center on primary monitor only
   $description: When enabled, the Notification Center (the clock/calendar popup) is only repositioned when opened on the primary monitor. On secondary monitors it appears at Windows' native default position. Only affects the Notification Center - Start Menu, Search and Control Center are unaffected. Default is off.
+  $type: bool
+
+- MoveFlyoutToasts: true
+  $name: Move notification toasts with Taskbar
+  $description: When enabled, the notification banners Windows pops up in the bottom-right corner are moved so that they hang off the right end of the taskbar instead of the screen corner, keeping Windows' own margins. Default is on.
   $type: bool
 
 - MoveFlyoutKeyboardLayout: true
