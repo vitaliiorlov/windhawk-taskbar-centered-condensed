@@ -80,6 +80,12 @@ struct TaskbarState {
   uintptr_t backgroundFillIdentity{0};
   uint64_t lastBackgroundStyleGeneration{0};
   bool hasCustomTaskbarBackgroundVisuals{false};
+  // Fork addition: see the startup pass over Windows' own taskbar background
+  // in the background block of ApplyStyle, for the "Stylize the taskbar
+  // background" setting being off.
+  bool windowsBackgroundNormalizeStarted{false};
+  int windowsBackgroundNormalizePasses{0};
+  ULONGLONG windowsBackgroundNormalizeNextMs{0};
   uint64_t lastDimensionInvalidationGeneration{0};
   TaskbarChildStyleCache taskbarChildStyleCache;
   TaskbarChildStyleCache trayChildStyleCache;

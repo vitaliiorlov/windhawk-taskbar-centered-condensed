@@ -7,18 +7,20 @@ TAI lets you transform your Windows 11 taskbar into a smooth floating dock witho
 
 # Bug reports
 
-This is a fork. File issues with **this fork** here: https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed/issues
+Issue tracker: https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed/issues
 
-For problems that also reproduce on upstream TAI, please report them upstream
-instead: https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed/issues
+Upstream TAI has been unmaintained since June 2026 and no longer works on the
+2026 Windows 11 builds, so issues reported there are unlikely to be answered.
 
 ---
 
-> ## 🍴 This is a personal fork
+> ## Where this code comes from
 >
 > Upstream: [DarkionAvey/windhawk-taskbar-centered-condensed](https://github.com/DarkionAvey/windhawk-taskbar-centered-condensed).
-> This fork ([vitaliiorlov/windhawk-taskbar-centered-condensed](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed))
-> tracks upstream closely; everything it adds or fixes on top is listed in
+> This community fork ([vitaliiorlov/windhawk-taskbar-centered-condensed](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed))
+> tracks upstream closely and carries the fixes that keep TAI working on the
+> 2026 Windows 11 builds (26100.9818, 26100/26200/26300.9974); everything it
+> adds or fixes on top is listed in
 > [What's different from upstream](https://github.com/vitaliiorlov/windhawk-taskbar-centered-condensed/blob/main/FORK-CHANGES.md).
 >
 > ### ⚠️ Own mod ID since 1.5.271
@@ -130,6 +132,8 @@ modify the source files in the `mod-parts` directory.
 | `TrayTaskGap` | Tray task gap | Adjust the space between the task area and the tray area. Default is 10 | Non-negative integer |
 | `TaskbarBackgroundHorizontalPadding` | Taskbar background horizontal padding | Set the horizontal padding on both sides of the taskbar background. Default is 2 | Non-negative integer |
 | `FullWidthTaskbarBackground` | Full-width taskbar background | When enabled, the taskbar background fills the entire width of the screen, similar to the default Windows behavior. Default is off | Boolean (true/false) |
+| `TaskItemsAlignment` | Task item alignment | Where the task buttons go inside the floating bar. "island" keeps upstream's layout - the buttons are packed at the bar's left edge, next to the tray. "system" keeps them centred in the bar, the way Windows' own "Taskbar alignment" setting does, while the tray stays at the bar's right end, so raising TrayTaskGap widens the bar and separates the tray from the buttons without moving them off centre. Default is island |  |
+| `TaskbarWidth` | Taskbar width | Width of the bar's content, in the same units as the other layout settings (the horizontal padding is added around it). 0 keeps the automatic width, where the bar grows with the buttons, the tray and TrayTaskGap. With a fixed width the task buttons stay centred in the bar (with "Task item alignment" set to "system") and the tray stays at its right end, so TrayTaskGap no longer changes the width. A value that is too small is ignored - the bar never gets narrower than its content. Default is 0 | Non-negative integer |
 | `IgnoreShowDesktopButton` | Ignore "Show Desktop" button | When enabled, the "Show Desktop" button is ignored in width calculations. Default is off | Boolean (true/false) |
 | `TaskbarCornerRadius` | Taskbar corner radius | Controls how rounded the taskbar corners appear. Default is 22 | Non-negative integer |
 | `TaskButtonCornerRadius` | Task button corner radius | Controls how rounded the corners of individual task buttons are. Default is 18 | Non-negative integer |
@@ -160,6 +164,7 @@ modify the source files in the `mod-parts` directory.
 | `MoveFlyoutNotificationCenter` | Move Notification Center with Taskbar | When enabled, the Notification Center is moved to align with taskbar size and location. Default is on. | Boolean (true/false) |
 | `AlignFlyoutInner` | Align flyout windows to the inside of the taskbar | When enabled, the flyout windows will be aligned within the bounds of the taskbar. When off, they will be 50% inside the taskbar bounds. Default is on. | Boolean (true/false) |
 | `NotificationCenterPrimaryOnly` | Notification Center on primary monitor only | When enabled, the Notification Center (the clock/calendar popup) is only repositioned when opened on the primary monitor. On secondary monitors it appears at Windows' native default position. Only affects the Notification Center - Start Menu, Search and Control Center are unaffected. Default is off. | Boolean (true/false) |
+| `MoveFlyoutToasts` | Move notification toasts with Taskbar | When enabled, the notification banners Windows pops up in the bottom-right corner are moved so that they hang off the right end of the taskbar instead of the screen corner, keeping Windows' own margins. Default is on. | Boolean (true/false) |
 | `MoveFlyoutKeyboardLayout` | Move keyboard layout flyout with Taskbar | When enabled, the keyboard layout flyout (opened by clicking the language indicator or pressing Win+Space) is centered above the language indicator on the taskbar instead of at the right edge of the screen. On a monitor whose taskbar has no language indicator it is centered above the tray instead. Default is on. | Boolean (true/false) |
 | `MoveTrayContextMenus` | Move tray icon menus with Taskbar | When enabled, the right-click menus of the clock and the system tray icons (network, volume, battery, language) open at the right end of the taskbar, lined up with the Notification Center, instead of at the right edge of the screen. Default is on. | Boolean (true/false) |
 | `StartMenuOnActiveMonitor` | Open Start on the monitor in use | When enabled, the Start menu opened with the Win key (or Ctrl+Esc) opens on the monitor of the window you are working in, or the one under the mouse when the desktop or a taskbar has focus, instead of always on the main display. A taskbar's Start button already opens it on that taskbar's monitor. Only monitors with a taskbar are used. Default is on. | Boolean (true/false) |

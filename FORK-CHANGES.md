@@ -32,7 +32,7 @@ See the [README](README.md) for installing and building.
    multi-monitor and mixed-DPI placement can be diagnosed without attaching
    DebugView. The Start menu, Search and Notification Center lines show
    where Windows put the window and where it was moved; repairs to a taskbar
-   (see 11) are logged there too. At 1 MB the file is renamed
+   (see 12) are logged there too. At 1 MB the file is renamed
    `windhawk_popup_log.old.txt` and a new one is started.
 
 4. **The keyboard layout flyout opens above the language indicator.**
@@ -77,10 +77,30 @@ See the [README](README.md) for installing and building.
    Auto-Hide Instant Show" brings the taskbar up from anywhere on the edge
    by itself, so leave it off to use this. Controlled by the
    `AutoHideShowUnderTaskbarOnly` setting (on by default).
+8. **The shell follows the floating bar: `TaskItemsAlignment`, `TaskbarWidth`
+   and `MoveFlyoutToasts`.**
+   The mod always parks the task buttons at the left edge of the island, so
+   Windows' own *Taskbar alignment* setting had no visible effect: choosing
+   *Center* moved the buttons in Explorer's layout and the island animation
+   pulled them straight back. `TaskItemsAlignment: system` centres them in the
+   space the tray leaves free instead, and the tray keeps to the bar's right
+   end. `TaskbarWidth` then pins how wide the floating bar is, in the same
+   units as the other layout settings (`0`, the default, keeps it
+   content-sized, which is the previous behaviour, and then `TrayTaskGap` still
+   decides the width); with a width set, the gap only moves the tray inside
+   it. The bar stays centred, rounded and inset by `TaskbarOffsetY` in both
+   modes, and never gets narrower than its content or wider than the screen.
+   The notification toasts are the other thing Windows lays out against the
+   screen edge: `ShellExperienceHost` right-aligns them to the work area, which
+   the island leaves empty, so they hung out over the strip beside the bar.
+   They are recognised by geometry rather than by their localized title and
+   moved by the distance the tray is inset from the monitor edge, which keeps
+   Windows' own margins. Controlled by the `MoveFlyoutToasts` setting (on by
+   default).
 
 ## Fixed
 
-8. **The system tray lines up with the island on Windows 11 25H2.**
+9. **The system tray lines up with the island on Windows 11 25H2.**
    On 25H2 the clock, battery, volume and language indicator sat above or
    below the app icons by exactly `TaskbarOffsetY`, and came back that way
    after every Explorer restart
@@ -90,7 +110,7 @@ See the [README](README.md) for installing and building.
    XAML centring it implicitly, which 25H2 stopped doing; the fork pins its
    vertical alignment to centre on every pass.
 
-9. **The mod loads on the September 2026 Windows update.**
+10. **The mod loads on the September 2026 Windows update.**
    Build 26100.9549 / 26200.9550 added a parameter to
    `CTaskBand::_UpdateItemIcon` in `taskbar.dll`, and the mod, whose hook
    only knew the old signature, stopped loading
@@ -101,7 +121,7 @@ See the [README](README.md) for installing and building.
    from `TaskbarIcon::Variant` to `TaskbarIcon::IconMetrics`. The hook
    accepts all three signatures.
 
-10. **The Notification Center opens beside the island from the first click.**
+11. **The Notification Center opens beside the island from the first click.**
     Upstream moves the clock and calendar flyout as Explorer reveals it, and
     recognises it by its window title. On the first open after Explorer
     starts, the window is revealed before it has a size or that title, so it
@@ -112,7 +132,7 @@ See the [README](README.md) for installing and building.
     the `MoveFlyoutNotificationCenter` and `NotificationCenterPrimaryOnly`
     settings.
 
-11. **Taskbars on several monitors are kept apart, and survive display changes.**
+12. **Taskbars on several monitors are kept apart, and survive display changes.**
     Each taskbar is matched to its monitor by the `TaskbarMonitor` property
     Explorer sets on it, not by where its window happens to be: an
     auto-hidden taskbar parked over the monitor below it was styled and
@@ -130,7 +150,7 @@ See the [README](README.md) for installing and building.
     menu part-way across the wrong monitor; Search still follows the
     taskbar whose Search button was clicked.
 
-12. **The running-app underline sits below the icon, not behind it.**
+13. **The running-app underline sits below the icon, not behind it.**
     Windows keeps a task button's underline a fixed distance up from the
     button's bottom edge and centres the icon, so a bigger icon or a shorter
     taskbar put the underline behind the icon's bottom edge. The icon is
@@ -144,7 +164,7 @@ See the [README](README.md) for installing and building.
     any display scale. The progress bar some apps show on their button gets
     the same move.
 
-13. **Start no longer freezes waiting on a flyout.**
+14. **Start no longer freezes waiting on a flyout.**
     Start could freeze until Explorer was restarted, mostly on opening
     Settings from it. Just before Explorer shows the Start menu, Search or
     the Notification Center, the mod moves the window, which belongs to
@@ -159,7 +179,7 @@ See the [README](README.md) for installing and building.
     `SetWindowPos` hook, which sees every window move in Explorer, now
     reads settings and process names only for the windows it changes.
 
-14. **Explorer's helper processes no longer crash on exit.**
+15. **Explorer's helper processes no longer crash on exit.**
     Explorer starts short-lived helper processes, for example to open an
     app from `shell:AppsFolder` or to host folder windows, and the mod
     loaded into each one. A `std::thread` still joinable at exit ends the
@@ -170,7 +190,7 @@ See the [README](README.md) for installing and building.
     Windows threads, and a helper started with arguments while another
     Explorer owns the taskbar skips the mod altogether.
 
-15. **Explorer no longer hangs on its first start after a Windows update.**
+16. **Explorer no longer hangs on its first start after a Windows update.**
     When an update replaces the taskbar's DLLs, Windhawk has to download
     their symbols for this mod from Microsoft before it can hook them, since
     Windhawk's online symbol cache only covers mods from its catalog; the
@@ -184,7 +204,7 @@ See the [README](README.md) for installing and building.
     Explorer runs with Windows' own taskbar sizes, and the taskbar is
     restyled as soon as the hooks are in.
 
-16. **Explorer no longer re-reads symbol files on every start.**
+17. **Explorer no longer re-reads symbol files on every start.**
     Windhawk caches the symbols a mod looks up, one entry per DLL, but a
     lookup that misses replaces the entry with its own symbols. The mod
     looks up symbols in `taskbar.dll`, `Taskbar.View.dll`, `SystemTray.dll`
@@ -194,7 +214,7 @@ See the [README](README.md) for installing and building.
     the symbols of the earlier lookups on its DLL, so the cache holds them
     all.
 
-17. **The Start button's hooks are set when Explorer starts with the mod on.**
+18. **The Start button's hooks are set when Explorer starts with the mod on.**
     Both bundled mods hooked `LoadLibraryExW` to catch `Taskbar.View.dll`
     loading, but Windhawk lets a mod hook a function only once and refused
     the second hook. So whenever Explorer started with the mod already
@@ -203,7 +223,7 @@ See the [README](README.md) for installing and building.
     right-click menu (see 5); they worked only after the mod was turned on
     in a running Explorer. The two now share one hook.
 
-18. **The mod loads when Microsoft is late with a Windows update's symbols.**
+19. **The mod loads when Microsoft is late with a Windows update's symbols.**
     Windhawk finds the functions the mod hooks in the symbol files that
     Microsoft publishes for each Windows build. The November 2026 update
     (26100.9974 / 26200.9974) arrived before its symbol files did, so the
@@ -216,6 +236,15 @@ See the [README](README.md) for installing and building.
     the mod has Windhawk look there before it downloads symbols from
     Microsoft (see [Symbol cache](README.md#symbol-cache) in the README). For a Windows build that isn't
     there, the usual case, that costs one small request to GitHub.
+
+20. **The taskbar no longer stays grey at sign-in with the stylize setting off.**
+    With `CustomizeTaskbarBackground` off the mod never touched
+    `BackgroundFill`, so the solid fill Explorer starts the session with was
+    left in place and the taskbar came up grey until the setting was toggled
+    off and on again. The off path now performs that same reset itself:
+    `BackgroundFill`, its clip and the custom visual are cleared, and the pass
+    is repeated over the first seconds of the session (and again when the
+    setting is switched off), so a fill restored late is dropped as well.
 
 Everything else — the island auto-scaling, the WindhawkBlur engine, the
 Y-above-taskbar clamp and Notification-Center detection — is upstream's
